@@ -13,7 +13,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Mapping, Optional, Sequence
+from typing import Any, Mapping, MutableMapping, Optional, Sequence
 
 import typer
 from langchain_core.messages import HumanMessage
@@ -534,6 +534,9 @@ def research(
         typer.echo(_format_result(result.get("result")))
 
 
+_DIFY_SEARCH_METHODS = ("hybrid_search", "semantic_search", "full_text_search", "keyword_search")
+
+
 @knowledge_app.command("retrieve")
 def knowledge_retrieve(
     query: str = typer.Argument(..., help="Query string to search within the configured Dify knowledge base."),
@@ -542,6 +545,46 @@ def knowledge_retrieve(
         "--top-k",
         min=1,
         help="Override the number of chunks returned (defaults to server setting).",
+    ),
+    search_method: Optional[str] = typer.Option(
+        None,
+        "--search-method",
+        help="Override the retrieval search method (hybrid_search, semantic_search, full_text_search, keyword_search).",
+    ),
+    reranking_enable: Optional[bool] = typer.Option(
+        None,
+        "--reranking/--no-reranking",
+        help="Toggle the reranking stage for Dify retrieval.",
+    ),
+    reranking_provider: Optional[str] = typer.Option(
+        None,
+        "--reranking-provider",
+        help="Provider identifier for the reranking model.",
+    ),
+    reranking_model: Optional[str] = typer.Option(
+        None,
+        "--reranking-model",
+        help="Model name for the reranker.",
+    ),
+    score_threshold: Optional[float] = typer.Option(
+        None,
+        "--score-threshold",
+        help="Score threshold applied when filtering retrieval results.",
+    ),
+    score_threshold_enabled: Optional[bool] = typer.Option(
+        None,
+        "--score-threshold-enabled/--no-score-threshold-enabled",
+        help="Explicitly enable or disable score threshold filtering.",
+    ),
+    weights: Optional[float] = typer.Option(
+        None,
+        "--semantic-weight",
+        help="Semantic weight applied when using hybrid search.",
+    ),
+    metadata_filters: Optional[str] = typer.Option(
+        None,
+        "--metadata",
+        help="JSON object or array describing metadata filtering conditions.",
     ),
     options: Optional[str] = typer.Option(
         None,
@@ -564,9 +607,57 @@ def knowledge_retrieve(
             raise typer.Exit(code=11)
         extra_options = dict(parsed)
 
+    metadata_payload: Any | None = None
+    if metadata_filters:
+        try:
+            parsed_metadata = json.loads(metadata_filters)
+        except json.JSONDecodeError as exc:
+            typer.secho(f"Invalid JSON for --metadata: {exc}", fg=typer.colors.RED)
+            raise typer.Exit(code=13) from exc
+        if not isinstance(parsed_metadata, (Mapping, list)):
+            typer.secho("--metadata must decode to a JSON object or array.", fg=typer.colors.RED)
+            raise typer.Exit(code=14)
+        metadata_payload = parsed_metadata
+
+    retrieval_overrides: MutableMapping[str, Any] = {}
+    if search_method:
+        normalized = search_method.strip().lower()
+        if normalized not in _DIFY_SEARCH_METHODS:
+            typer.secho(
+                f"Unsupported search method '{search_method}'. " f"Choose from: {', '.join(_DIFY_SEARCH_METHODS)}.",
+                fg=typer.colors.RED,
+            )
+            raise typer.Exit(code=15)
+        retrieval_overrides["search_method"] = normalized
+    if reranking_enable is not None:
+        retrieval_overrides["reranking_enable"] = reranking_enable
+    if reranking_provider or reranking_model:
+        if not reranking_provider or not reranking_model:
+            typer.secho("Both --reranking-provider and --reranking-model are required together.", fg=typer.colors.RED)
+            raise typer.Exit(code=16)
+        retrieval_overrides["reranking_mode"] = {
+            "reranking_provider_name": reranking_provider,
+            "reranking_model_name": reranking_model,
+        }
+    if score_threshold_enabled is not None:
+        retrieval_overrides["score_threshold_enabled"] = score_threshold_enabled
+    if score_threshold is not None:
+        retrieval_overrides["score_threshold"] = score_threshold
+        retrieval_overrides.setdefault("score_threshold_enabled", True)
+    if weights is not None:
+        retrieval_overrides["weights"] = weights
+
+    retrieval_payload: Mapping[str, Any] | None = retrieval_overrides or None
+
     try:
         client = DifyKnowledgeBaseClient()
-        result = client.retrieve(query, top_k=top_k, options=extra_options)
+        result = client.retrieve(
+            query,
+            top_k=top_k,
+            retrieval_model=retrieval_payload,
+            metadata_filters=metadata_payload,
+            options=extra_options,
+        )
     except DifyKnowledgeBaseError as exc:
         response = WorkspaceResponse.error("Knowledge base retrieval failed.", errors=(str(exc),))
         _emit_response(response, json_output)

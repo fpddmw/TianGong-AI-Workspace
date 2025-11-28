@@ -4,9 +4,10 @@ LangChain tool definitions that expose workspace capabilities to agents.
 
 from __future__ import annotations
 
-from typing import Any, Mapping, Optional
+from typing import Any, Mapping, Optional, Sequence
 
 from langchain_core.tools import tool
+from pydantic import BaseModel
 
 from ..tooling.dify import DifyKnowledgeBaseClient, DifyKnowledgeBaseError
 from ..tooling.executors import PythonExecutor, ShellExecutor
@@ -17,10 +18,13 @@ from ..tooling.tool_schemas import (
     DifyKnowledgeBaseOutput,
     DocumentToolInput,
     DocumentToolOutput,
+    MetadataFilterConditionInput,
+    MetadataFilterGroupInput,
     Neo4jCommandInput,
     Neo4jCommandOutput,
     PythonCommandInput,
     PythonCommandOutput,
+    RetrievalModelInput,
     ShellCommandInput,
     ShellCommandOutput,
     TavilySearchInput,
@@ -87,16 +91,45 @@ def create_tavily_tool(client: Optional[TavilySearchClient] = None, *, name: str
 def create_dify_knowledge_tool(client: Optional[DifyKnowledgeBaseClient] = None, *, name: str = "dify_knowledge") -> Any:
     kb_client = client or DifyKnowledgeBaseClient()
 
+    def _dump_model(value: Any) -> Any:
+        if isinstance(value, BaseModel):
+            return value.model_dump(exclude_none=True)
+        return value
+
+    def _prepare_metadata_filters(
+        filters: MetadataFilterGroupInput | Sequence[MetadataFilterConditionInput] | Mapping[str, Any] | None,
+    ) -> Any:
+        if filters is None:
+            return None
+        if isinstance(filters, MetadataFilterGroupInput):
+            return filters.model_dump(exclude_none=True)
+        if isinstance(filters, Sequence) and not isinstance(filters, (str, bytes)):
+            return [_dump_model(item) for item in filters]
+        if isinstance(filters, Mapping):
+            return dict(filters)
+        return filters
+
     @tool(name, args_schema=DifyKnowledgeBaseInput)
     def dify_knowledge(
         query: str,
         top_k: int | None = None,
+        retrieval_model: RetrievalModelInput | Mapping[str, Any] | None = None,
+        metadata_filters: MetadataFilterGroupInput | Sequence[MetadataFilterConditionInput] | None = None,
         options: Optional[Mapping[str, Any]] = None,
     ) -> Mapping[str, Any]:
         """Retrieve chunks from the configured Dify knowledge base."""
 
+        retrieval_payload = _dump_model(retrieval_model) if retrieval_model is not None else None
+        metadata_payload = _prepare_metadata_filters(metadata_filters)
+
         try:
-            result = kb_client.retrieve(query, top_k=top_k, options=dict(options or {}))
+            result = kb_client.retrieve(
+                query,
+                top_k=top_k,
+                retrieval_model=retrieval_payload,
+                metadata_filters=metadata_payload,
+                options=dict(options or {}),
+            )
         except DifyKnowledgeBaseError as exc:
             payload = DifyKnowledgeBaseOutput(status="error", message=str(exc))
             return payload.model_dump()

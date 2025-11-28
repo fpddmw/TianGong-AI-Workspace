@@ -17,6 +17,10 @@ __all__ = [
     "DocumentToolOutput",
     "DifyKnowledgeBaseInput",
     "DifyKnowledgeBaseOutput",
+    "MetadataFilterConditionInput",
+    "MetadataFilterGroupInput",
+    "RetrievalModelInput",
+    "RerankingModeInput",
     "Neo4jCommandInput",
     "Neo4jCommandOutput",
     "PythonCommandInput",
@@ -70,9 +74,76 @@ class TavilySearchOutput(BaseModel):
     message: str | None = None
 
 
+class RerankingModeInput(BaseModel):
+    reranking_provider_name: str = Field(..., description="Provider identifier for the rerank model.")
+    reranking_model_name: str = Field(..., description="Model name for the reranker.")
+
+
+class MetadataFilterConditionInput(BaseModel):
+    name: str = Field(..., description="Metadata key to evaluate.")
+    comparison_operator: str = Field(..., description="Comparison operator (e.g. eq, ne, contains).")
+    value: str | float | int | None = Field(default=None, description="Value to compare against.")
+
+
+class MetadataFilterGroupInput(BaseModel):
+    logical_operator: Literal["and", "or"] = Field(
+        "and",
+        description="Logical operator used to join metadata filter conditions.",
+    )
+    conditions: list[MetadataFilterConditionInput] = Field(
+        ...,
+        min_length=1,
+        description="List of metadata filter conditions that must all be satisfied.",
+    )
+
+
+class RetrievalModelInput(BaseModel):
+    search_method: Literal["hybrid_search", "semantic_search", "full_text_search", "keyword_search"] | None = Field(
+        default=None,
+        description="Search strategy to use when retrieving from the knowledge base.",
+    )
+    reranking_enable: bool | None = Field(
+        default=None,
+        description="Enable reranking of retrieved segments.",
+    )
+    reranking_mode: RerankingModeInput | None = Field(
+        default=None,
+        description="Reranking provider/model configuration.",
+    )
+    top_k: int | None = Field(
+        default=None,
+        ge=1,
+        description="Maximum number of segments returned.",
+    )
+    score_threshold_enabled: bool | None = Field(
+        default=None,
+        description="Enable score threshold filtering.",
+    )
+    score_threshold: float | None = Field(
+        default=None,
+        description="Score threshold applied when filtering retrieval results.",
+    )
+    weights: float | None = Field(
+        default=None,
+        description="Weighting applied to semantic search when using hybrid search.",
+    )
+    metadata_filtering_conditions: MetadataFilterGroupInput | None = Field(
+        default=None,
+        description="Metadata filters applied to retrieval results.",
+    )
+
+
 class DifyKnowledgeBaseInput(BaseModel):
     query: str = Field(..., description="Knowledge base query string.")
     top_k: int | None = Field(default=None, ge=1, description="Optional limit on retrieved chunks.")
+    retrieval_model: RetrievalModelInput | None = Field(
+        default=None,
+        description="Structured retrieval model overrides forwarded to Dify.",
+    )
+    metadata_filters: MetadataFilterGroupInput | list[MetadataFilterConditionInput] | None = Field(
+        default=None,
+        description="Convenience metadata filtering parameters injected into the retrieval model.",
+    )
     options: dict[str, Any] | None = Field(
         default=None,
         description="Additional parameters forwarded to the Dify retrieval API.",

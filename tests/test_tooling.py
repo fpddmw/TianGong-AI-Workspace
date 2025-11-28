@@ -87,12 +87,22 @@ def test_dify_client_retrieve(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(DifyKnowledgeBaseClient, "_post", fake_post, raising=False)
 
-    result = client.retrieve("test", top_k=3, options={"score_threshold": 0.5})
+    result = client.retrieve(
+        "test",
+        top_k=3,
+        retrieval_model={"search_method": "semantic_search"},
+        metadata_filters=[{"name": "tag", "comparison_operator": "eq", "value": "workspace"}],
+        options={"retrieval_model": {"reranking_enable": True}},
+    )
 
     assert result["query"] == "test"
     assert result["result"]["hit"]
-    assert captured["json"]["top_k"] == 3
-    assert captured["json"]["score_threshold"] == 0.5
+    assert captured["json"]["retrieval_model"]["top_k"] == 3
+    assert captured["json"]["retrieval_model"]["search_method"] == "semantic_search"
+    assert captured["json"]["retrieval_model"]["reranking_enable"] is True
+    filters = captured["json"]["retrieval_model"]["metadata_filtering_conditions"]
+    assert filters["logical_operator"] == "and"
+    assert filters["conditions"][0]["name"] == "tag"
     assert captured["headers"]["Authorization"] == "Bearer dataset-123"
 
 

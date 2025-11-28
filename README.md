@@ -121,11 +121,19 @@ uv run tiangong-workspace research "AI 写作辅助工具对比" --json
 `knowledge` 子命令直接通过 HTTP 访问 Dify 知识库，无需再配置 `dify_knowledge_base_mcp`：
 
 ```bash
-uv run tiangong-workspace knowledge retrieve "大数据治理" --top-k 8
-uv run tiangong-workspace knowledge retrieve "新能源" --options '{"retrieval_model": {"search_method": "hybrid_search"}}'
+# 调整检索策略与语义/关键词权重
+uv run tiangong-workspace knowledge retrieve "大数据治理" --top-k 8 --search-method semantic_search --semantic-weight 0.35
+
+# 结合重排模型与元数据过滤
+uv run tiangong-workspace knowledge retrieve \
+  "新能源" \
+  --reranking \
+  --reranking-provider openai \
+  --reranking-model text-embedding-3-large \
+  --metadata '{"logical_operator": "and", "conditions": [{"name": "doc_type", "comparison_operator": "eq", "value": "白皮书"}]}'
 ```
 
-命令会输出结构化 `WorkspaceResponse`，若搭配 `--json` 可方便地串接其他 Agent。`--options` 允许透传 `score_threshold`、`metadata_filtering_conditions`、`reranking_mode` 等 Dify API 参数。
+命令会输出结构化 `WorkspaceResponse`，若搭配 `--json` 可方便地串接其他 Agent。除了沿用 `--options` 透传底层参数外，现在也可以通过 `--search-method`、`--reranking/--no-reranking`、`--reranking-provider/--reranking-model`、`--score-threshold`、`--score-threshold-enabled/--no-score-threshold-enabled`、`--semantic-weight` 与 `--metadata` 等旗标直接组装 Dify `retrieval_model` 以及 `metadata_filtering_conditions`，使检索精准可控。
 
 ## Secrets 配置
 1. 复制 `.sercrets/secrets.example.toml` 为 `.sercrets/secrets.toml`（保持文件不入库）。

@@ -56,7 +56,7 @@ All three must pass before sharing updates.
 - `uv run tiangong-workspace agents list` — view autonomous agents + runtime executors available to agents.
 - `uv run tiangong-workspace agents run "<task>" [--no-shell/--no-python/--no-tavily/--no-dify/--no-document --engine langgraph|deepagents]` — run the workspace DeepAgent with the preferred backend.
 - `uv run tiangong-workspace research "<query>"` — invoke Tavily MCP search (also supports `--json`).
-- `uv run tiangong-workspace knowledge retrieve "<query>"` — call the Dify knowledge base API without MCP.
+- `uv run tiangong-workspace knowledge retrieve "<query>"` — call the Dify knowledge base API without MCP；可用 `--search-method`、`--reranking/--no-reranking`、`--reranking-provider/--reranking-model`、`--score-threshold`、`--semantic-weight` 与 `--metadata` 快速配置 Dify `retrieval_model` 与元数据过滤。
 - `uv run tiangong-workspace mcp services|tools|invoke` — inspect and call configured MCP services.
 
 Use `--json` for machine-readable responses suitable for chaining agents.
@@ -82,7 +82,7 @@ Use `--json` for machine-readable responses suitable for chaining agents.
 - Shell/Python executors enforce configurable timeouts and command allow-lists—reuse them instead of invoking `subprocess` or `exec` directly.
 - LangChain tools should depend on the schemas in `tooling.tool_schemas` so registry metadata stays consistent.
 - Neo4j automation lives in `tooling.neo4j`; reuse `Neo4jClient` + `Neo4jCommand*` schemas to expose graph operations or add migrations/tests.
-- Dify knowledge base access lives in `tooling.dify` and `agents/tools.create_dify_knowledge_tool`; reuse them to expose retrieval without MCP transport.
+- Dify knowledge base access lives in `tooling.dify` and `agents/tools.create_dify_knowledge_tool`; reuse them to expose retrieval without MCP transport，必要时直接使用 `RetrievalModelConfig`、`MetadataFilterGroup` 等帮助类来构建与 API 规范一致的检索请求。
 - Choose the DeepAgents backend via `--engine deepagents` when you need its filesystem/todo middleware; ensure the supplied LLM implements `BaseChatModel`.
 - Keep logs redaction-aware if adding persistence; avoid leaking API keys.
 - Workspace agent factory accepts `model`, `include_*` flags, and additional tools/subagents. Reuse `tooling.executors` or extend `agents/tools.py` when exposing new capabilities to autonomous agents.
