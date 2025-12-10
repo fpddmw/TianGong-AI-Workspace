@@ -186,7 +186,7 @@ api_key = "dataset-XXXX"
 dataset_id = "53a90891-853c-4bf0-bf39-96dd84e11501"
 ```
 
-配置完成后即可使用 `knowledge retrieve` 命令或 Dify LangChain Tool，无需再维护 `dify_knowledge_base_mcp` 段落。
+配置完成后即可使用 `knowledge retrieve` 命令或 Dify LangChain Tool。
 
 6. 若需启用 OpenAI 兼容的 embedding 生成（支持本地/私有部署服务），可按以下示例添加配置，其中 `api_key` 允许留空：
 
