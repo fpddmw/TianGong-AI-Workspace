@@ -91,6 +91,14 @@ class DifyKnowledgeBaseSecrets:
 
 
 @dataclass(slots=True)
+class MineruSecrets:
+    """Configuration for the Mineru document image extraction service."""
+
+    api_url: str
+    token: str
+
+
+@dataclass(slots=True)
 class Secrets:
     """Container bundling all supported secret entries."""
 
@@ -99,6 +107,7 @@ class Secrets:
     openai_compatible_embedding: Optional[OpenAICompatibleEmbeddingSecrets] = None
     neo4j: Optional[Neo4jSecrets] = None
     dify_knowledge_base: Optional[DifyKnowledgeBaseSecrets] = None
+    mineru: Optional[MineruSecrets] = None
 
 
 def discover_secrets_path() -> Path:
@@ -181,12 +190,21 @@ def load_secrets(path: Optional[Path] = None) -> Secrets:
 
     embedding_data = _load_embedding_section(data)
 
+    mineru_data = data.get("mineru")
+    mineru_secrets = None
+    if isinstance(mineru_data, Mapping):
+        api_url = _get_opt_str(mineru_data, "api_url")
+        token = _get_opt_str(mineru_data, "token")
+        if api_url and token:
+            mineru_secrets = MineruSecrets(api_url=api_url.rstrip("/"), token=token)
+
     return Secrets(
         openai=openai_secrets,
         mcp_servers=dict(mcp_entries),
         openai_compatible_embedding=embedding_data,
         neo4j=neo4j_secrets,
         dify_knowledge_base=dify_secrets,
+        mineru=mineru_secrets,
     )
 
 
@@ -239,6 +257,7 @@ __all__ = [
     "OpenAISecrets",
     "Neo4jSecrets",
     "DifyKnowledgeBaseSecrets",
+    "MineruSecrets",
     "Secrets",
     "discover_secrets_path",
     "load_secrets",

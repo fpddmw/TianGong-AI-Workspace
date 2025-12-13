@@ -28,6 +28,7 @@ from .tooling.config import CLIToolConfig, load_workspace_config
 from .tooling.dify import DifyKnowledgeBaseClient, DifyKnowledgeBaseError
 from .tooling.embeddings import OpenAICompatibleEmbeddingClient, OpenAIEmbeddingError
 from .tooling.llm import ModelPurpose
+from .tooling.mineru import MineruClient, MineruClientError
 from .tooling.tavily import TavilySearchClient, TavilySearchError
 
 app = typer.Typer(help="Tiangong AI Workspace CLI for managing local AI tooling.")
@@ -379,6 +380,85 @@ def docs_run(
             typer.echo("")
             typer.echo("# --- AI Review ---")
             typer.echo(result.get("ai_review", ""))
+
+
+# --------------------------------------------------------------------------- Mineru
+
+
+@app.command("mineru-with-images")
+def mineru_with_images(
+    file: Path = typer.Argument(
+        ...,
+        path_type=Path,
+        exists=True,
+        dir_okay=False,
+        readable=True,
+        resolve_path=True,
+        help="Path to the PDF document to process.",
+    ),
+    prompt: Optional[str] = typer.Option(None, "--prompt", help="Optional prompt to steer extraction."),
+    save_to_minio: bool = typer.Option(
+        False,
+        "--save-to-minio/--no-save-to-minio",
+        help="Toggle storing results in MinIO on the server side.",
+    ),
+    minio_address: Optional[str] = typer.Option(None, "--minio-address", help="MinIO service address."),
+    minio_access_key: Optional[str] = typer.Option(None, "--minio-access-key", help="MinIO access key."),
+    minio_secret_key: Optional[str] = typer.Option(None, "--minio-secret-key", help="MinIO secret key."),
+    minio_bucket: Optional[str] = typer.Option(None, "--minio-bucket", help="Target MinIO bucket name."),
+    minio_prefix: Optional[str] = typer.Option(None, "--minio-prefix", help="Key prefix used when saving to MinIO."),
+    minio_meta: Optional[str] = typer.Option(None, "--minio-meta", help="Metadata string forwarded to MinIO."),
+    provider: Optional[str] = typer.Option(None, "--provider", help="Optional model provider forwarded to Mineru."),
+    model: Optional[str] = typer.Option(None, "--model", help="Optional model name forwarded to Mineru."),
+    url: Optional[str] = typer.Option(None, "--url", help="Override the Mineru endpoint URL."),
+    token: Optional[str] = typer.Option(None, "--token", help="Override the Mineru bearer token."),
+    output: Optional[Path] = typer.Option(
+        None,
+        "--output",
+        "-o",
+        path_type=Path,
+        help="Optional file path to write the raw Mineru JSON response.",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Emit a machine-readable JSON response."),
+) -> None:
+    """Call the Mineru PDF image extraction API."""
+
+    try:
+        client = MineruClient(api_url_override=url, token_override=token)
+        result = client.recognize_with_images(
+            file,
+            prompt=prompt,
+            save_to_minio=save_to_minio,
+            minio_address=minio_address,
+            minio_access_key=minio_access_key,
+            minio_secret_key=minio_secret_key,
+            minio_bucket=minio_bucket,
+            minio_prefix=minio_prefix,
+            minio_meta=minio_meta,
+            provider=provider,
+            model=model,
+        )
+    except MineruClientError as exc:
+        response = WorkspaceResponse.error("Mineru request failed.", errors=(str(exc),), source="mineru")
+        _emit_response(response, json_output)
+        raise typer.Exit(code=1) from exc
+
+    if output:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            output.write_text(json.dumps(result, indent=2, ensure_ascii=False))
+        except OSError as exc:
+            response = WorkspaceResponse.error("Mineru request succeeded but writing to disk failed.", errors=(str(exc),), source="mineru")
+            _emit_response(response, json_output)
+            raise typer.Exit(code=2) from exc
+
+    response = WorkspaceResponse.ok(payload=result, message="Mineru image extraction completed.", source="mineru")
+    _emit_response(response, json_output)
+
+    if not json_output:
+        typer.echo("")
+        typer.echo(f"Endpoint: {result.get('request', {}).get('endpoint')}")
+        typer.echo(f"File: {result.get('request', {}).get('file')}")
 
 
 # --------------------------------------------------------------------------- MCP

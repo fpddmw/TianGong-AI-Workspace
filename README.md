@@ -10,9 +10,9 @@
 ## 目录结构
 - `install_*.sh` / `install_windows.ps1`：一键安装脚本。
 - `src/tiangong_ai_workspace/`：工作区 Python 包与 CLI 入口。
-  - `cli.py`：Typer CLI，包含 `docs`、`agents`、`research` 与 `mcp` 子命令。
+  - `cli.py`：Typer CLI，包含 `docs`、`agents`、`research`、`knowledge`、`embeddings`、`mineru-with-images` 与 `mcp` 子命令。
   - `agents/`：LangGraph 文档工作流 (`workflows.py`)、LangGraph/DeepAgents 双引擎自主智能体 (`deep_agent.py`)、具备 Pydantic 入参与输出校验的 LangChain Tool 封装 (`tools.py`)。
-  - `tooling/`：响应封装、工作区配置加载 (`config.py`)、工具注册表、模型路由器 (`llm.py`)、统一 Tool Schema (`tool_schemas.py`)、Tavily MCP 搜索客户端、Dify 知识库客户端 (`dify.py`)、Neo4j 图数据库客户端 (`neo4j.py`) 以及带审计的 Shell/Python 执行器。
+  - `tooling/`：响应封装、工作区配置加载 (`config.py`)、工具注册表、模型路由器 (`llm.py`)、统一 Tool Schema (`tool_schemas.py`)、Tavily MCP 搜索客户端、Dify 知识库客户端 (`dify.py`)、Mineru PDF 图像识别客户端 (`mineru.py`)、Neo4j 图数据库客户端 (`neo4j.py`) 以及带审计的 Shell/Python 执行器。
   - `templates/`：不同文档类型的结构提示。
   - `mcp_client.py`：同步封装的 MCP 客户端。
   - `secrets.py`：凭证加载逻辑。
@@ -62,6 +62,7 @@ uv run tiangong-workspace tools --catalog   # 查看内部工作流与工具注�
 uv run tiangong-workspace agents list       # 查看自主智能体与运行时代码执行器
 uv run tiangong-workspace knowledge retrieve "查询关键词"  # 直接检索 Dify 知识库
 uv run tiangong-workspace embeddings generate "示例文本"   # 调用 OpenAI 兼容 embedding 服务
+uv run tiangong-workspace mineru-with-images ./doc.pdf --prompt "提取图表含义"  # 调用 Mineru PDF 图片解析 API
 ```
 
 所有支持的命令都提供 `--json` 选项，可输出结构化响应，方便被其他智能体消费。
@@ -153,6 +154,30 @@ uv run tiangong-workspace embeddings generate "text A" "text B" \
 
 命令默认输出摘要信息，追加 `--json` 会返回包含 `embeddings`、`model`、`dimensions`、`usage` 的结构化 `WorkspaceResponse`，方便直接写入向量数据库或串接 Agent 工具。若连接到无鉴权的本地模型，可将 `api_key` 置为空字符串即可兼容。
 
+## PDF 图片解析（Mineru）
+`mineru-with-images` 子命令直接调用工作区内部的 Mineru API（`/mineru_with_images`），完成 PDF 文档中图片的识别与解析，支持最小调用和 MinIO 结果落盘：
+
+```bash
+uv run tiangong-workspace mineru-with-images ./samples/paper.pdf \
+  --prompt "总结每个图表的关键信息" \
+  --provider openai \
+  --model gpt-4o-mini \
+  --save-to-minio \
+  --minio-address http://minio.local:9000 \
+  --minio-access-key <AK> \
+  --minio-secret-key <SK> \
+  --minio-bucket papers \
+  --minio-prefix figures/ \
+  --output mineru_result.json
+```
+
+参数说明：
+- `--prompt`：可选，指导 Mineru 生成更聚焦的图像说明。
+- `--save-to-minio/--no-save-to-minio` 及 `--minio-*`：可选，将解析结果持久化到指定 MinIO。
+- `--provider` / `--model`：透传给 Mineru 服务的模型配置。
+- `--url` / `--token`：覆盖默认的 Mineru 接口地址与 Bearer 鉴权令牌（默认从 `.sercrets/secrets.toml` 读取）。
+- `--output`：将 Mineru 返回的完整 JSON 写入本地文件，便于后处理。
+
 ## Secrets 配置
 1. 复制 `.sercrets/secrets.example.toml` 为 `.sercrets/secrets.toml`（保持文件不入库）。
 2. 填写 `openai.api_key`，可选配置 `model`、`chat_model`、`deep_research_model`。
@@ -196,6 +221,14 @@ dataset_id = "53a90891-853c-4bf0-bf39-96dd84e11501"
 url = "http://192.168.1.140:8004/v1/"
 api_key = ""
 model = "Qwen/Qwen3-Embedding-0.6B"
+```
+
+7. Mineru PDF 图片识别 API 需要 Bearer 鉴权和接口地址，可按以下示例配置（未填写时 CLI 会提示缺失）：
+
+```toml
+[mineru]
+api_url = "http://thuenv.tiangong.world:7770/mineru_with_images"
+token = "<YOUR_MINERU_TOKEN>"
 ```
 
 ## 自定义集成

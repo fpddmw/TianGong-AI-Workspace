@@ -106,6 +106,13 @@ entrypoint = "tiangong_ai_workspace.tooling.dify.DifyKnowledgeBaseClient.retriev
 tags = ["knowledge", "dify"]
 
 [[tool.tiangong.workspace.tool_registry]]
+name = "vision.mineru_with_images"
+description = "Extract PDF figures and text using the Mineru image-aware parsing service."
+category = "integration"
+entrypoint = "tiangong_ai_workspace.tooling.mineru.MineruClient.recognize_with_images"
+tags = ["pdf", "vision", "mineru"]
+
+[[tool.tiangong.workspace.tool_registry]]
 name = "database.neo4j"
 description = "Execute Cypher queries against the configured Neo4j graph database."
 category = "integration"

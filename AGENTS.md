@@ -6,7 +6,7 @@
 - Primary entry point: `uv run tiangong-workspace`, featuring LangChain/LangGraph document agents, LangGraph planning agents, and Tavily MCP research.
 
 ## Repository Layout
-- `src/tiangong_ai_workspace/cli.py`: Typer CLI with `docs`, `agents`, `research`, and `mcp` subcommands plus structured JSON output support.
+- `src/tiangong_ai_workspace/cli.py`: Typer CLI with `docs`, `agents`, `research`, `knowledge`, `embeddings`, `mineru-with-images`, and `mcp` subcommands plus structured JSON output support.
 - `src/tiangong_ai_workspace/agents/`:
   - `workflows.py`: LangChain/LangGraph document workflows (reports, plans, patent, proposals).
   - `deep_agent.py`: Workspace autonomous agent supporting both native LangGraph loops and the `deepagents` runtime.
@@ -20,6 +20,7 @@
   - `embeddings.py`: OpenAI-compatible embedding client surfaced via CLI/registry.
   - `tavily.py`: Tavily MCP client with retry + structured payloads.
   - `dify.py`: Direct HTTP client for the Dify knowledge base (no MCP required).
+  - `mineru.py`: HTTP client for the Mineru PDF image extraction API.
   - `neo4j.py`: Neo4j driver wrapper used by CRUD tools and registry metadata.
   - `executors.py`: Shell/Python execution helpers with timeouts, allow-lists, and structured telemetry for agent consumption.
 - `src/tiangong_ai_workspace/templates/`: Markdown scaffolds referenced by workflows.
@@ -59,6 +60,7 @@ All three must pass before sharing updates.
 - `uv run tiangong-workspace research "<query>"` — invoke Tavily MCP search (also supports `--json`).
 - `uv run tiangong-workspace knowledge retrieve "<query>"` — call the Dify knowledge base API without MCP；可用 `--search-method`、`--reranking/--no-reranking`、`--reranking-provider/--reranking-model`、`--score-threshold`、`--semantic-weight` 与 `--metadata` 快速配置 Dify `retrieval_model` 与元数据过滤。
 - `uv run tiangong-workspace embeddings generate "<text>"` — 调用 OpenAI 兼容 embedding 服务，支持批量文本、`--model/--json`。
+- `uv run tiangong-workspace mineru-with-images ./file.pdf --prompt "解析图表"` — 调用 Mineru PDF 图片解析 API，支持 MinIO 落盘与模型透传。
 - `uv run tiangong-workspace mcp services|tools|invoke` — inspect and call configured MCP services.
 
 Use `--json` for machine-readable responses suitable for chaining agents.
@@ -70,6 +72,7 @@ Use `--json` for machine-readable responses suitable for chaining agents.
 - Neo4j section (optional) defines `uri`, `username`, `password`, and `database`; when absent the Neo4j LangChain tool is automatically disabled.
 - `dify_knowledge_base` defines `api_base_url`, `api_key`, and `dataset_id`; this powers the `knowledge retrieve` CLI and the LangChain Dify tool (no MCP block required).
 - `openai_compatitble_embedding` defines `url`, optional `api_key`, and `model` for the embedding CLI/registry tool；`api_key` 可留空以兼容无鉴权服务。
+- `mineru` defines `api_url` and `token` for the Mineru PDF 图片解析服务；CLI 支持 `--url`/`--token` 覆盖默认值。
 - Secrets stay local; never commit `.sercrets/`.
 
 ## Maintenance Rules

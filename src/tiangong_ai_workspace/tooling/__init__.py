@@ -8,6 +8,7 @@ schemas, tool registries, and external service wrappers that agents can reuse.
 from .dify import DifyKnowledgeBaseClient
 from .embeddings import OpenAICompatibleEmbeddingClient
 from .executors import PythonExecutor, ShellExecutor
+from .mineru import MineruClient
 from .neo4j import Neo4jClient
 from .registry import ToolDescriptor, list_registered_tools
 from .responses import ResponsePayload, WorkspaceResponse
@@ -15,6 +16,7 @@ from .responses import ResponsePayload, WorkspaceResponse
 __all__ = [
     "DifyKnowledgeBaseClient",
     "OpenAICompatibleEmbeddingClient",
+    "MineruClient",
     "PythonExecutor",
     "ResponsePayload",
     "Neo4jClient",
