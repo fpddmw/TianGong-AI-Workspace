@@ -27,9 +27,9 @@ from .tooling import WorkspaceResponse, list_registered_tools
 from .tooling.config import CLIToolConfig, load_workspace_config
 from .tooling.dify import DifyKnowledgeBaseClient, DifyKnowledgeBaseError
 from .tooling.embeddings import OpenAICompatibleEmbeddingClient, OpenAIEmbeddingError
-from .tooling.llm import ModelPurpose
+from .tooling.llm import ModelPurpose, ModelRouter
 from .tooling.mineru import MineruClient, MineruClientError
-from .tooling.openalex import OpenAlexClient, OpenAlexClientError
+from .tooling.openalex import LLMCitationAssessor, OpenAlexClient, OpenAlexClientError
 from .tooling.tavily import TavilySearchClient, TavilySearchError
 
 app = typer.Typer(help="Tiangong AI Workspace CLI for managing local AI tooling.")
@@ -472,11 +472,41 @@ def citation_study(
     limit: int = typer.Option(20, "--limit", min=1, max=200, help="Maximum number of works to evaluate."),
     sample: bool = typer.Option(False, "--sample", help="Use OpenAlex sampling instead of sorted results."),
     sort: str = typer.Option("cited_by_count:desc", "--sort", help="OpenAlex sort expression (default: cited_by_count:desc)."),
+    model: Optional[str] = typer.Option(None, "--model", help="Override the OpenAI model for LLM scoring."),
+    temperature: float = typer.Option(0.2, "--temperature", help="Sampling temperature for LLM scoring."),
+    pdf: Optional[Path] = typer.Option(
+        None,
+        "--pdf",
+        path_type=Path,
+        exists=True,
+        dir_okay=False,
+        readable=True,
+        resolve_path=True,
+        help="Optional PDF file to summarize figures via Mineru and feed into scoring.",
+    ),
+    mineru_url: Optional[str] = typer.Option(None, "--mineru-url", help="Override Mineru endpoint when using --pdf."),
+    mineru_token: Optional[str] = typer.Option(None, "--mineru-token", help="Override Mineru token when using --pdf."),
     json_output: bool = typer.Option(False, "--json", help="Emit a machine-readable JSON response."),
 ) -> None:
     """Fetch recent papers from OpenAlex and classify citation potential (high/medium/low)."""
 
     client = OpenAlexClient()
+    router = ModelRouter()
+    assessor = LLMCitationAssessor(router=router, model=model, temperature=temperature)
+
+    figure_notes: Optional[str] = None
+    if pdf:
+        try:
+            mineru = MineruClient(api_url_override=mineru_url, token_override=mineru_token)
+            mineru_prompt = "请逐条概括文档中的每个图表/配图，重点说明图表类型、呈现的数据或流程，以及它们如何帮助读者理解核心贡献。" "不要臆造不存在的图表。输出简洁的要点列表。"
+            mineru_result = mineru.recognize_with_images(pdf, prompt=mineru_prompt)
+            figure_payload = mineru_result.get("result")
+            figure_notes = json.dumps(figure_payload, ensure_ascii=False)[:1500]
+        except MineruClientError as exc:
+            response = WorkspaceResponse.error("Mineru 图表摘要失败，但 OpenAlex 结果仍可返回。", errors=(str(exc),), source="citation-study")
+            _emit_response(response, json_output)
+            figure_notes = None
+
     try:
         works = client.search_works(
             query,
@@ -491,7 +521,36 @@ def citation_study(
         _emit_response(response, json_output)
         raise typer.Exit(code=1) from exc
 
-    classified = [client.classify_work(work) for work in works]
+    classified = []
+    for work in works:
+        heuristic = client.classify_work(work)
+        try:
+            llm_result = assessor.assess(work, heuristic=heuristic, figure_notes=figure_notes)
+        except Exception as exc:  # pragma: no cover - defensive: fall back to heuristic
+            llm_result = {
+                "article_type": "其他",
+                "citation_category": heuristic["category"],
+                "score": heuristic["score"],
+                "rationale": [f"LLM 评分失败，回退启发式: {exc}"],
+                "raw": None,
+            }
+        combined = {
+            "id": work.get("id"),
+            "title": work.get("title"),
+            "publication_year": work.get("publication_year"),
+            "cited_by_count": work.get("cited_by_count"),
+            "reference_count": work.get("referenced_works_count"),
+            "open_access": heuristic.get("open_access"),
+            "abstract_words": heuristic.get("abstract_words"),
+            "article_type": llm_result["article_type"],
+            "final_category": llm_result["citation_category"],
+            "llm_score": llm_result["score"],
+            "llm_rationale": llm_result["rationale"],
+            "heuristic_category": heuristic["category"],
+            "heuristic_score": heuristic["score"],
+        }
+        classified.append(combined)
+
     payload = {
         "query": query,
         "provider": "openalex",
@@ -505,9 +564,11 @@ def citation_study(
         typer.echo("")
         for item in classified:
             title = item.get("title") or "(untitled)"
-            typer.echo(f"[{item['category']}] {title} ({item.get('publication_year') or 'n/a'}) — cites: {item['cited_by_count']}, score: {item['score']}")
+            typer.echo(
+                f"[{item['final_category']}] {item['article_type']} | {title} ({item.get('publication_year') or 'n/a'}) " f"— cites: {item['cited_by_count']}, llm_score: {item['llm_score']}"
+            )
         typer.echo("")
-        typer.echo("Use --json for structured results including rationales.")
+        typer.echo("Use --json for structured results including rationales and baseline heuristics.")
 
 
 # --------------------------------------------------------------------------- MCP

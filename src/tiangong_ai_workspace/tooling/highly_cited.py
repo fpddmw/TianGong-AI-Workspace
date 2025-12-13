@@ -2,7 +2,8 @@ import requests
 
 TARGET_ISSN = "1879-0658"
 TARGET_JOURNAL = "Resources, Conservation & Recycling"
-PUBLISH_YEAR = '2023'
+PUBLISH_YEAR = "2023"
+
 
 def _norm_journal_name(name) -> str:
     if not name:
@@ -27,7 +28,7 @@ params = {
     "sort": "cited_by_count:desc",
     # "sort": "cited_by_count:asc",
     "per-page": 20,
-    "select": "id,doi,title,publication_year,cited_by_count,type,locations"
+    "select": "id,doi,title,publication_year,cited_by_count,type,locations",
 }
 
 r = requests.get(url, params=params, timeout=30)

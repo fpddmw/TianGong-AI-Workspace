@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Iterable, Mapping, MutableMapping, Optional, Sequence
 
 import httpx
+from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.outputs import ChatResult
+from langchain_openai import ChatOpenAI
 
-__all__ = ["OpenAlexClient", "OpenAlexClientError"]
+from .llm import ModelRouter
+
+__all__ = ["OpenAlexClient", "OpenAlexClientError", "LLMCitationAssessor"]
 
 BASE_URL = "https://api.openalex.org"
 
@@ -162,3 +168,98 @@ class OpenAlexClient:
         if self.http_client is not None:
             return self.http_client.get(url, params=params, timeout=self.timeout)
         return httpx.get(url, params=params, timeout=self.timeout)
+
+
+@dataclass(slots=True)
+class LLMCitationAssessor:
+    """LLM-driven classifier for article type and citation potential."""
+
+    router: ModelRouter
+    model: Optional[str] = None
+    temperature: float = 0.2
+
+    def assess(
+        self,
+        work: Mapping[str, Any],
+        *,
+        heuristic: Mapping[str, Any] | None = None,
+        figure_notes: Optional[str] = None,
+    ) -> Mapping[str, Any]:
+        """Call the configured LLM to classify review vs research and rescore citation potential."""
+
+        chat_model: ChatOpenAI = self.router.create_chat_model(
+            purpose="general",
+            temperature=self.temperature,
+            model_override=self.model,
+        )
+        system_prompt = (
+            "你是一名文献计量分析员，目标是根据论文的元数据、摘要要点与图表表现，对论文类型（综述/研究/其他）进行判断，并给出未来引用潜力评级。"
+            "引用次数可作为提示，但不可成为唯一依据。请综合发表年份、新颖性、摘要信息密度、参考文献丰富度、是否开放获取，以及图表对可读性的支持。"
+            "输出 JSON，字段包括: article_type(综述|研究|其他), citation_category(high|medium|low), score(0-100), rationale(中文要点数组)。"
+            "评分提示：综述类若覆盖面广、引用多、图表梳理清晰可倾向高分；研究类若方法/实验充分且图表解释力强、引用在同龄段领先可加分。"
+        )
+
+        abstract_text = _flatten_abstract(work.get("abstract_inverted_index"))
+        metadata = {
+            "title": work.get("title"),
+            "publication_year": work.get("publication_year"),
+            "cited_by_count": work.get("cited_by_count"),
+            "referenced_works_count": work.get("referenced_works_count"),
+            "open_access": bool(work.get("open_access", {}).get("is_oa")) if isinstance(work.get("open_access"), Mapping) else False,
+            "abstract_excerpt": abstract_text[:1200] if abstract_text else "",
+            "type": work.get("type"),
+        }
+
+        heuristic_note = None
+        if heuristic:
+            heuristic_note = {
+                "baseline_category": heuristic.get("category"),
+                "baseline_score": heuristic.get("score"),
+                "baseline_rationale": heuristic.get("rationale"),
+            }
+
+        user_payload: MutableMapping[str, Any] = {"metadata": metadata}
+        if heuristic_note:
+            user_payload["heuristic_hint"] = heuristic_note
+        if figure_notes:
+            user_payload["figure_notes"] = figure_notes
+
+        messages = [
+            SystemMessage(content=system_prompt),
+            HumanMessage(
+                content=[
+                    {
+                        "type": "text",
+                        "text": "请基于以下信息给出分类与引用潜力评分，输出 JSON 对象。",
+                    },
+                    {"type": "text", "text": json.dumps(user_payload, ensure_ascii=False)},
+                ]
+            ),
+        ]
+
+        result: ChatResult = chat_model.invoke(messages, response_format={"type": "json_object"})
+        content = result.generations[0].message.content if result.generations else result.content  # type: ignore[attr-defined]
+        if isinstance(content, str):
+            try:
+                parsed = json.loads(content)
+            except json.JSONDecodeError as exc:
+                raise OpenAlexClientError(f"LLM 返回的 JSON 无法解析: {exc}") from exc
+        elif isinstance(content, Mapping):
+            parsed = dict(content)
+        else:  # pragma: no cover - defensive fallback
+            raise OpenAlexClientError("LLM 返回的内容格式未知，期望 JSON 对象。")
+
+        article_type = str(parsed.get("article_type") or "其他")
+        citation_category = str(parsed.get("citation_category") or "medium").lower()
+        score = float(parsed.get("score") or 50.0)
+        rationale = parsed.get("rationale") or []
+        if not isinstance(rationale, list):
+            rationale = [str(rationale)]
+
+        return {
+            "article_type": article_type,
+            "citation_category": citation_category,
+            "score": score,
+            "rationale": rationale,
+            "raw": parsed,
+        }

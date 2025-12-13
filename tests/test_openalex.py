@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import pytest
+from langchain_core.messages import AIMessage
+from langchain_core.outputs import ChatGeneration, ChatResult
 
-from tiangong_ai_workspace.tooling.openalex import OpenAlexClient, OpenAlexClientError
+from tiangong_ai_workspace.tooling.openalex import LLMCitationAssessor, OpenAlexClient, OpenAlexClientError
 
 
 def test_search_works_empty_query_raises() -> None:
@@ -44,3 +46,25 @@ def test_classify_work_returns_category() -> None:
     result = client.classify_work(work)
     assert result["category"] == "high"
     assert result["score"] > 0
+
+
+def test_llm_assessor_parses_json(monkeypatch: pytest.MonkeyPatch) -> None:
+    work = {
+        "title": "LLM paper",
+        "abstract_inverted_index": {"a": [0]},
+    }
+
+    class _StubModel:
+        def invoke(self, messages, response_format=None):
+            generation = ChatGeneration(message=AIMessage(content='{"article_type":"综述","citation_category":"high","score":88,"rationale":["覆盖面广"]}'))
+            return ChatResult(generations=[generation])
+
+    class _StubRouter:
+        def create_chat_model(self, **kwargs):
+            return _StubModel()
+
+    assessor = LLMCitationAssessor(router=_StubRouter())  # type: ignore[arg-type]
+    result = assessor.assess(work, heuristic={"category": "medium", "score": 2.0, "rationale": []})
+    assert result["article_type"] == "综述"
+    assert result["citation_category"] == "high"
+    assert result["score"] == 88

@@ -20,7 +20,7 @@
   - `embeddings.py`: OpenAI-compatible embedding client surfaced via CLI/registry.
   - `tavily.py`: Tavily MCP client with retry + structured payloads.
   - `dify.py`: Direct HTTP client for the Dify knowledge base (no MCP required).
-  - `openalex.py`: OpenAlex client plus heuristic citation potential classifier.
+  - `openalex.py`: OpenAlex client plus LLM-driven review/研究类型识别与引用潜力分类（可结合图表摘要）。
   - `mineru.py`: HTTP client for the Mineru PDF image extraction API.
   - `neo4j.py`: Neo4j driver wrapper used by CRUD tools and registry metadata.
   - `executors.py`: Shell/Python execution helpers with timeouts, allow-lists, and structured telemetry for agent consumption.
@@ -61,7 +61,7 @@ All three must pass before sharing updates.
 - `uv run tiangong-workspace research "<query>"` — invoke Tavily MCP search (also supports `--json`).
 - `uv run tiangong-workspace knowledge retrieve "<query>"` — call the Dify knowledge base API without MCP；可用 `--search-method`、`--reranking/--no-reranking`、`--reranking-provider/--reranking-model`、`--score-threshold`、`--semantic-weight` 与 `--metadata` 快速配置 Dify `retrieval_model` 与元数据过滤。
 - `uv run tiangong-workspace embeddings generate "<text>"` — 调用 OpenAI 兼容 embedding 服务，支持批量文本、`--model/--json`。
-- `uv run tiangong-workspace citation-study "large language model" --since-year 2020 --limit 30` — 调用 OpenAlex 获取近年论文并按高/中/低引用潜力分类。
+- `uv run tiangong-workspace citation-study "large language model" --since-year 2020 --limit 30 --pdf ./paper.pdf` — 调用 OpenAlex + OpenAI 区分综述/研究并在图表摘要加持下按高/中/低引用潜力分类。
 - `uv run tiangong-workspace mineru-with-images ./file.pdf --prompt "解析图表"` — 调用 Mineru PDF 图片解析 API，支持 MinIO 落盘与模型透传。
 - `uv run tiangong-workspace mcp services|tools|invoke` — inspect and call configured MCP services.
 
