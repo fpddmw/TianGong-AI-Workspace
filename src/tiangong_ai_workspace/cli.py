@@ -29,6 +29,7 @@ from .tooling.dify import DifyKnowledgeBaseClient, DifyKnowledgeBaseError
 from .tooling.embeddings import OpenAICompatibleEmbeddingClient, OpenAIEmbeddingError
 from .tooling.llm import ModelPurpose
 from .tooling.mineru import MineruClient, MineruClientError
+from .tooling.openalex import OpenAlexClient, OpenAlexClientError
 from .tooling.tavily import TavilySearchClient, TavilySearchError
 
 app = typer.Typer(help="Tiangong AI Workspace CLI for managing local AI tooling.")
@@ -459,6 +460,54 @@ def mineru_with_images(
         typer.echo("")
         typer.echo(f"Endpoint: {result.get('request', {}).get('endpoint')}")
         typer.echo(f"File: {result.get('request', {}).get('file')}")
+
+
+# --------------------------------------------------------------------------- Citation study (OpenAlex)
+
+
+@app.command("citation-study")
+def citation_study(
+    query: str = typer.Argument(..., help="Search query to find related papers."),
+    since_year: Optional[int] = typer.Option(2019, "--since-year", help="Only include works published on/after this year."),
+    limit: int = typer.Option(20, "--limit", min=1, max=200, help="Maximum number of works to evaluate."),
+    sample: bool = typer.Option(False, "--sample", help="Use OpenAlex sampling instead of sorted results."),
+    sort: str = typer.Option("cited_by_count:desc", "--sort", help="OpenAlex sort expression (default: cited_by_count:desc)."),
+    json_output: bool = typer.Option(False, "--json", help="Emit a machine-readable JSON response."),
+) -> None:
+    """Fetch recent papers from OpenAlex and classify citation potential (high/medium/low)."""
+
+    client = OpenAlexClient()
+    try:
+        works = client.search_works(
+            query,
+            since_year=since_year,
+            per_page=limit,
+            sample=sample,
+            sort=sort,
+            fields=("id", "title", "publication_year", "cited_by_count", "referenced_works_count", "abstract_inverted_index", "open_access"),
+        )
+    except OpenAlexClientError as exc:
+        response = WorkspaceResponse.error("OpenAlex query failed.", errors=(str(exc),), source="citation-study")
+        _emit_response(response, json_output)
+        raise typer.Exit(code=1) from exc
+
+    classified = [client.classify_work(work) for work in works]
+    payload = {
+        "query": query,
+        "provider": "openalex",
+        "count": len(classified),
+        "works": classified,
+    }
+    response = WorkspaceResponse.ok(payload=payload, message="Citation potential analysis completed.", source="citation-study")
+    _emit_response(response, json_output)
+
+    if not json_output:
+        typer.echo("")
+        for item in classified:
+            title = item.get("title") or "(untitled)"
+            typer.echo(f"[{item['category']}] {title} ({item.get('publication_year') or 'n/a'}) — cites: {item['cited_by_count']}, score: {item['score']}")
+        typer.echo("")
+        typer.echo("Use --json for structured results including rationales.")
 
 
 # --------------------------------------------------------------------------- MCP

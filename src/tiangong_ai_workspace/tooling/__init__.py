@@ -10,12 +10,14 @@ from .embeddings import OpenAICompatibleEmbeddingClient
 from .executors import PythonExecutor, ShellExecutor
 from .mineru import MineruClient
 from .neo4j import Neo4jClient
+from .openalex import OpenAlexClient
 from .registry import ToolDescriptor, list_registered_tools
 from .responses import ResponsePayload, WorkspaceResponse
 
 __all__ = [
     "DifyKnowledgeBaseClient",
     "OpenAICompatibleEmbeddingClient",
+    "OpenAlexClient",
     "MineruClient",
     "PythonExecutor",
     "ResponsePayload",

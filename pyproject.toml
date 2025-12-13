@@ -113,6 +113,13 @@ entrypoint = "tiangong_ai_workspace.tooling.mineru.MineruClient.recognize_with_i
 tags = ["pdf", "vision", "mineru"]
 
 [[tool.tiangong.workspace.tool_registry]]
+name = "analysis.citation_study"
+description = "Fetch recent papers from OpenAlex and label citation potential (high/medium/low)."
+category = "analysis"
+entrypoint = "tiangong_ai_workspace.tooling.openalex.OpenAlexClient.classify_work"
+tags = ["openalex", "citation", "analysis"]
+
+[[tool.tiangong.workspace.tool_registry]]
 name = "database.neo4j"
 description = "Execute Cypher queries against the configured Neo4j graph database."
 category = "integration"

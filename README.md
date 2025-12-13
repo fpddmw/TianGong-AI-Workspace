@@ -10,9 +10,9 @@
 ## 目录结构
 - `install_*.sh` / `install_windows.ps1`：一键安装脚本。
 - `src/tiangong_ai_workspace/`：工作区 Python 包与 CLI 入口。
-  - `cli.py`：Typer CLI，包含 `docs`、`agents`、`research`、`knowledge`、`embeddings`、`mineru-with-images` 与 `mcp` 子命令。
+  - `cli.py`：Typer CLI，包含 `docs`、`agents`、`research`、`knowledge`、`embeddings`、`citation-study`、`mineru-with-images` 与 `mcp` 子命令。
   - `agents/`：LangGraph 文档工作流 (`workflows.py`)、LangGraph/DeepAgents 双引擎自主智能体 (`deep_agent.py`)、具备 Pydantic 入参与输出校验的 LangChain Tool 封装 (`tools.py`)。
-  - `tooling/`：响应封装、工作区配置加载 (`config.py`)、工具注册表、模型路由器 (`llm.py`)、统一 Tool Schema (`tool_schemas.py`)、Tavily MCP 搜索客户端、Dify 知识库客户端 (`dify.py`)、Mineru PDF 图像识别客户端 (`mineru.py`)、Neo4j 图数据库客户端 (`neo4j.py`) 以及带审计的 Shell/Python 执行器。
+  - `tooling/`：响应封装、工作区配置加载 (`config.py`)、工具注册表、模型路由器 (`llm.py`)、统一 Tool Schema (`tool_schemas.py`)、Tavily MCP 搜索客户端、Dify 知识库客户端 (`dify.py`)、OpenAlex 引用潜力分析客户端 (`openalex.py`)、Mineru PDF 图像识别客户端 (`mineru.py`)、Neo4j 图数据库客户端 (`neo4j.py`) 以及带审计的 Shell/Python 执行器。
   - `templates/`：不同文档类型的结构提示。
   - `mcp_client.py`：同步封装的 MCP 客户端。
   - `secrets.py`：凭证加载逻辑。
@@ -62,6 +62,7 @@ uv run tiangong-workspace tools --catalog   # 查看内部工作流与工具注�
 uv run tiangong-workspace agents list       # 查看自主智能体与运行时代码执行器
 uv run tiangong-workspace knowledge retrieve "查询关键词"  # 直接检索 Dify 知识库
 uv run tiangong-workspace embeddings generate "示例文本"   # 调用 OpenAI 兼容 embedding 服务
+uv run tiangong-workspace citation-study "large language model" --since-year 2020 --limit 30  # 调用 OpenAlex 分类引用潜力
 uv run tiangong-workspace mineru-with-images ./doc.pdf --prompt "提取图表含义"  # 调用 Mineru PDF 图片解析 API
 ```
 
@@ -153,6 +154,19 @@ uv run tiangong-workspace embeddings generate "text A" "text B" \
 ```
 
 命令默认输出摘要信息，追加 `--json` 会返回包含 `embeddings`、`model`、`dimensions`、`usage` 的结构化 `WorkspaceResponse`，方便直接写入向量数据库或串接 Agent 工具。若连接到无鉴权的本地模型，可将 `api_key` 置为空字符串即可兼容。
+
+## 引用潜力分析（OpenAlex）
+`citation-study` 子命令基于 OpenAlex API 获取近年的论文元数据，并按高/中/低三个档位给出引用潜力标签与理由，便于后续用更精细的特征（摘要逻辑、配图、写作风格）迭代模型：
+
+```bash
+uv run tiangong-workspace citation-study "foundation model alignment" \
+  --since-year 2020 \
+  --limit 30 \
+  --sort cited_by_count:desc \
+  --json
+```
+
+输出包含每篇论文的 `title`、`publication_year`、`cited_by_count`、`reference_count`、`abstract_words`、`open_access`、`category`（high/medium/low）、`score` 与 `rationale`，可直接串接 Agent 继续做摘要/行文逻辑/配图等特征分析。
 
 ## PDF 图片解析（Mineru）
 `mineru-with-images` 子命令直接调用工作区内部的 Mineru API（`/mineru_with_images`），完成 PDF 文档中图片的识别与解析，支持最小调用和 MinIO 结果落盘：
