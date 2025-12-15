@@ -398,6 +398,21 @@ def mineru_with_images(
         help="Path to the PDF document to process.",
     ),
     prompt: Optional[str] = typer.Option(None, "--prompt", help="Optional prompt to steer extraction."),
+    chunk_type: bool = typer.Option(
+        False,
+        "--chunk-type/--no-chunk-type",
+        help="Return chunked result by type (Mineru server flag).",
+    ),
+    return_txt: bool = typer.Option(
+        False,
+        "--return-txt/--no-return-txt",
+        help="Return plain text alongside structured output (Mineru server flag).",
+    ),
+    pretty: bool = typer.Option(
+        False,
+        "--pretty/--no-pretty",
+        help="Ask Mineru to pretty-print the structured output.",
+    ),
     save_to_minio: bool = typer.Option(
         False,
         "--save-to-minio/--no-save-to-minio",
@@ -429,6 +444,9 @@ def mineru_with_images(
         result = client.recognize_with_images(
             file,
             prompt=prompt,
+            chunk_type=chunk_type,
+            return_txt=return_txt,
+            pretty=pretty,
             save_to_minio=save_to_minio,
             minio_address=minio_address,
             minio_access_key=minio_access_key,

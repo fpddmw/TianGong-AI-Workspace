@@ -29,18 +29,22 @@ def test_mineru_client_sends_payload(monkeypatch: pytest.MonkeyPatch, tmp_path) 
         def json(self):
             return {"ok": True}
 
-    def fake_post(self, url: str, *, files, data, headers):
+    def fake_post(self, url: str, *, files, data, headers, params):
         captured["url"] = url
         captured["data"] = dict(data)
         captured["headers"] = dict(headers)
         captured["file_tuple"] = files["file"]
+        captured["params"] = dict(params)
         return _StubResponse()
 
-    monkeypatch.setattr(MineruClient, "_post", fake_post, raising=False)
+    monkeypatch.setattr(MineruClient, "_post_with_retry", fake_post, raising=False)
 
     result = client.recognize_with_images(
         pdf_path,
         prompt="check images",
+        chunk_type=True,
+        return_txt=True,
+        pretty=True,
         save_to_minio=True,
         minio_address="http://minio",
         minio_access_key="ak",
@@ -55,6 +59,9 @@ def test_mineru_client_sends_payload(monkeypatch: pytest.MonkeyPatch, tmp_path) 
     assert captured["url"] == "https://example.com/mineru_with_images"
     assert captured["headers"]["Authorization"] == "Bearer abc123"
     assert captured["data"]["prompt"] == "check images"
+    assert captured["params"]["chunk_type"] is True
+    assert captured["params"]["return_txt"] is True
+    assert captured["params"]["pretty"] is True
     assert captured["data"]["save_to_minio"] == "true"
     assert captured["data"]["minio_bucket"] == "bucket"
     assert captured["data"]["provider"] == "openai"

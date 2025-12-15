@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, MutableMapping, Optional
@@ -25,6 +26,8 @@ class MineruClient:
     api_url_override: Optional[str] = None
     token_override: Optional[str] = None
     timeout: float = 60.0
+    retries: int = 3
+    retry_backoff: float = 1.5
     http_client: Optional[httpx.Client] = None
     _config: MineruSecrets = field(init=False, repr=False)
 
@@ -45,6 +48,9 @@ class MineruClient:
         file_path: Path,
         *,
         prompt: Optional[str] = None,
+        chunk_type: bool = False,
+        return_txt: bool = False,
+        pretty: bool = False,
         save_to_minio: bool = False,
         minio_address: Optional[str] = None,
         minio_access_key: Optional[str] = None,
@@ -52,8 +58,8 @@ class MineruClient:
         minio_bucket: Optional[str] = None,
         minio_prefix: Optional[str] = None,
         minio_meta: Optional[str] = None,
-        provider: Optional[str] = None,
-        model: Optional[str] = None,
+        provider: Optional[str] = "vllm",
+        model: Optional[str] = "Qwen/Qwen3-VL-30B-A3B-Instruct-FP8",
     ) -> Mapping[str, Any]:
         """Send a PDF to the Mineru API and return the parsed JSON response."""
 
@@ -83,11 +89,16 @@ class MineruClient:
 
         url = self._config.api_url
         headers = {"Authorization": f"Bearer {self._config.token}"}
+        params = {
+            "chunk_type": chunk_type,
+            "return_txt": return_txt,
+            "pretty": pretty,
+        }
 
         with file_path.open("rb") as handle:
             files = {"file": (file_path.name, handle, "application/pdf")}
             try:
-                response = self._post(url, files=files, data=form_data, headers=headers)
+                response = self._post_with_retry(url, files=files, data=form_data, headers=headers, params=params)
                 response.raise_for_status()
             except httpx.HTTPError as exc:
                 raise MineruClientError(f"Mineru API request failed: {exc}") from exc
@@ -102,7 +113,37 @@ class MineruClient:
             "result": data,
         }
 
-    def _post(self, url: str, *, files: Mapping[str, Any], data: Mapping[str, Any], headers: Mapping[str, str]) -> httpx.Response:
+    def _post(
+        self,
+        url: str,
+        *,
+        files: Mapping[str, Any],
+        data: Mapping[str, Any],
+        headers: Mapping[str, str],
+        params: Mapping[str, Any],
+    ) -> httpx.Response:
         if self.http_client is not None:
-            return self.http_client.post(url, files=files, data=data, headers=headers, timeout=self.timeout)
-        return httpx.post(url, files=files, data=data, headers=headers, timeout=self.timeout)
+            return self.http_client.post(url, files=files, data=data, headers=headers, params=params, timeout=self.timeout)
+        return httpx.post(url, files=files, data=data, headers=headers, params=params, timeout=self.timeout)
+
+    def _post_with_retry(
+        self,
+        url: str,
+        *,
+        files: Mapping[str, Any],
+        data: Mapping[str, Any],
+        headers: Mapping[str, str],
+        params: Mapping[str, Any],
+    ) -> httpx.Response:
+        last_exc: httpx.HTTPError | None = None
+        attempts = max(1, self.retries)
+        for attempt in range(attempts):
+            try:
+                return self._post(url, files=files, data=data, headers=headers, params=params)
+            except httpx.HTTPError as exc:
+                last_exc = exc
+                if attempt >= attempts - 1:
+                    break
+                time.sleep(self.retry_backoff * (2**attempt))
+        assert last_exc is not None  # for type checkers
+        raise last_exc
