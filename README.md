@@ -170,7 +170,7 @@ uv run tiangong-workspace citation-study "foundation model alignment" \
 
 - 自动识别类型：`article_type` 会返回 综述/研究/其他。
 - LLM 评分：`final_category`（high/medium/low）和 `llm_score` 由 OpenAI 评估，`heuristic_category` 提供可解释的基准评分。
-- 图表加权：指定 `--pdf` 后会通过 Mineru 汇总图表要点并注入提示词，帮助 LLM 评估可读性与引用潜在影响。
+- 图表加权：指定 `--pdf` 后会通过 Mineru 汇总图表要点并注入提示词，自动抽取返回结果中以 “Image Description” 开头的段落，帮助 LLM 评估可读性与引用潜在影响。
 输出包含 `title`、`publication_year`、`cited_by_count`、`reference_count`、`abstract_words`、`article_type`、`final_category`、`llm_score` 及中英文 rationale，可直接串接 Agent 继续做摘要/行文逻辑/配图等特征分析。
 
 ## PDF 图片解析（Mineru）

@@ -525,7 +525,22 @@ def citation_study(
             mineru_prompt = "请逐条概括文档中的每个图表/配图，重点说明图表类型、呈现的数据或流程，以及它们如何帮助读者理解核心贡献。" "不要臆造不存在的图表。输出简洁的要点列表。"
             mineru_result = mineru.recognize_with_images(pdf, prompt=mineru_prompt)
             figure_payload = mineru_result.get("result")
-            figure_notes = json.dumps(figure_payload, ensure_ascii=False)[:1500]
+            if isinstance(figure_payload, list):
+                figure_descriptions: list[str] = []
+                for entry in figure_payload:
+                    if not isinstance(entry, Mapping):
+                        continue
+                    text = entry.get("text")
+                    if not isinstance(text, str):
+                        continue
+                    if text.strip().lower().startswith("image description"):
+                        page = entry.get("page_number")
+                        prefix = f"[p{page}] " if page is not None else ""
+                        figure_descriptions.append(prefix + text.strip())
+                if figure_descriptions:
+                    figure_notes = "\n".join(figure_descriptions)
+                else:
+                    figure_notes = json.dumps(figure_payload, ensure_ascii=False)[:2000]
         except MineruClientError as exc:
             response = WorkspaceResponse.error("Mineru 图表摘要失败，但 OpenAlex 结果仍可返回。", errors=(str(exc),), source="citation-study")
             _emit_response(response, json_output)
