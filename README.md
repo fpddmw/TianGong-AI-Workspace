@@ -62,6 +62,7 @@ uv run tiangong-workspace tools --catalog   # 查看内部工作流与工具注�
 uv run tiangong-workspace agents list       # 查看自主智能体与运行时代码执行器
 uv run tiangong-workspace knowledge retrieve "查询关键词"  # 直接检索 Dify 知识库
 uv run tiangong-workspace embeddings generate "示例文本"   # 调用 OpenAI 兼容 embedding 服务
+uv run tiangong-workspace openalex-fetch "large language model" --limit 20 --download-dir ./papers  # 预取元数据+尝试下载 PDF
 uv run tiangong-workspace citation-study "large language model" --since-year 2020 --limit 30  # 调用 OpenAlex 分类引用潜力
 uv run tiangong-workspace mineru-with-images ./doc.pdf --prompt "提取图表含义"  # 调用 Mineru PDF 图片解析 API
 ```
@@ -156,15 +157,15 @@ uv run tiangong-workspace embeddings generate "text A" "text B" \
 命令默认输出摘要信息，追加 `--json` 会返回包含 `embeddings`、`model`、`dimensions`、`usage` 的结构化 `WorkspaceResponse`，方便直接写入向量数据库或串接 Agent 工具。若连接到无鉴权的本地模型，可将 `api_key` 置为空字符串即可兼容。
 
 ## 引用潜力分析（OpenAlex）
-`citation-study` 子命令基于 OpenAlex API 获取近年的论文元数据，并在 LLM 加持下区分综述/研究两类，再按高/中/低三个档位给出引用潜力标签与理由。启发式指标（发表年份/引用数/参考文献/是否 OA/摘要长度）仅作提示，最终分类由 OpenAI 模型结合全文摘要与可选的图表信息决策：
+`openalex-fetch` 用于前置拉取元数据并可选下载 PDF，便于离线处理。`citation-study` 支持直接读取 `--works-file`（来自 `openalex-fetch` 或自定义 JSON）并可通过 `--pdf-dir` 批量匹配对应 PDF；也可在只有一篇文章时用 `--pdf` 指定单个文件。LLM 将区分综述/研究并按高/中/低三个档位给出引用潜力标签与理由。启发式指标（发表年份/引用数/参考文献/是否 OA/摘要长度）仅作提示，最终分类由 OpenAI 模型结合摘要与图表信息决策：
 
 ```bash
 uv run tiangong-workspace citation-study "foundation model alignment" \
   --since-year 2020 \
   --limit 30 \
   --sort cited_by_count:desc \
-  --model gpt-4o-mini \
-  --pdf ./paper.pdf \
+  --works-file ./openalex_results.json \
+  --pdf-dir ./papers \
   --json
 ```
 

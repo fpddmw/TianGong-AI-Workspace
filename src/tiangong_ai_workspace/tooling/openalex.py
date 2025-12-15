@@ -5,9 +5,11 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Iterable, Mapping, MutableMapping, Optional, Sequence
 
 import httpx
+from httpx import HTTPError
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.outputs import ChatResult
 from langchain_openai import ChatOpenAI
@@ -87,6 +89,36 @@ class OpenAlexClient:
         if not isinstance(results, list):
             raise OpenAlexClientError("OpenAlex response missing 'results'.")
         return results
+
+    def extract_pdf_url(self, work: Mapping[str, Any]) -> Optional[str]:
+        """Return the best PDF URL available in a work record."""
+
+        primary = work.get("primary_location") or {}
+        if isinstance(primary, Mapping):
+            pdf_url = primary.get("pdf_url")
+            if isinstance(pdf_url, str) and pdf_url.startswith("http"):
+                return pdf_url
+        for loc in work.get("locations") or []:
+            if not isinstance(loc, Mapping):
+                continue
+            pdf_url = loc.get("pdf_url")
+            if isinstance(pdf_url, str) and pdf_url.startswith("http"):
+                return pdf_url
+        return None
+
+    def download_pdf(self, url: str, dest: Path) -> Path:
+        """Download a PDF to the destination path."""
+
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with httpx.stream("GET", url, timeout=120.0) as response:
+                response.raise_for_status()
+                with dest.open("wb") as handle:
+                    for chunk in response.iter_bytes():
+                        handle.write(chunk)
+        except HTTPError as exc:
+            raise OpenAlexClientError(f"Failed to download PDF from {url}: {exc}") from exc
+        return dest
 
     def classify_work(self, work: Mapping[str, Any]) -> Mapping[str, Any]:
         """Assign a coarse citation potential category with rationale."""
@@ -175,7 +207,6 @@ class LLMCitationAssessor:
     """LLM-driven classifier for article type and citation potential."""
 
     router: ModelRouter
-    model: Optional[str] = None
     temperature: float = 0.2
 
     def assess(
@@ -190,7 +221,6 @@ class LLMCitationAssessor:
         chat_model: ChatOpenAI = self.router.create_chat_model(
             purpose="general",
             temperature=self.temperature,
-            model_override=self.model,
         )
         system_prompt = (
             "你是一名文献计量分析员，目标是根据论文的元数据、摘要要点与图表表现，对论文类型（综述/研究/其他）进行判断，并给出未来引用潜力评级。"

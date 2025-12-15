@@ -9,6 +9,7 @@ Edit this file to tailor the workspace to your own toolchain.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -481,6 +482,103 @@ def mineru_with_images(
         typer.echo(f"File: {result.get('request', {}).get('file')}")
 
 
+# --------------------------------------------------------------------------- OpenAlex preparation
+
+
+@app.command("openalex-fetch")
+def openalex_fetch(
+    query: str = typer.Argument(..., help="Search query to find related papers via OpenAlex."),
+    since_year: Optional[int] = typer.Option(2019, "--since-year", help="Only include works published on/after this year."),
+    limit: int = typer.Option(20, "--limit", min=1, max=200, help="Maximum number of works to fetch."),
+    sample: bool = typer.Option(False, "--sample", help="Use OpenAlex sampling instead of sorted results."),
+    sort: str = typer.Option("cited_by_count:desc", "--sort", help="OpenAlex sort expression (default: cited_by_count:desc)."),
+    download_dir: Optional[Path] = typer.Option(
+        None,
+        "--download-dir",
+        path_type=Path,
+        file_okay=False,
+        resolve_path=True,
+        help="Optional directory to download PDFs when available.",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Emit a machine-readable JSON response."),
+) -> None:
+    """Fetch OpenAlex works metadata (optionally downloading PDFs for later analysis)."""
+
+    client = OpenAlexClient()
+    try:
+        works = client.search_works(
+            query,
+            since_year=since_year,
+            per_page=limit,
+            sample=sample,
+            sort=sort,
+            fields=(
+                "id",
+                "doi",
+                "title",
+                "publication_year",
+                "cited_by_count",
+                "referenced_works_count",
+                "abstract_inverted_index",
+                "open_access",
+                "primary_location",
+                "locations",
+            ),
+        )
+    except OpenAlexClientError as exc:
+        response = WorkspaceResponse.error("OpenAlex query failed.", errors=(str(exc),), source="openalex")
+        _emit_response(response, json_output)
+        raise typer.Exit(code=1) from exc
+
+    download_errors: list[str] = []
+    prepared: list[Mapping[str, Any]] = []
+    for idx, work in enumerate(works, start=1):
+        pdf_url = client.extract_pdf_url(work)
+        pdf_path: Optional[str] = None
+        if download_dir and pdf_url:
+            slug = _make_work_slug(work, fallback=str(idx))
+            dest = download_dir / f"{slug}.pdf"
+            try:
+                client.download_pdf(pdf_url, dest)
+                pdf_path = str(dest)
+            except OpenAlexClientError as exc:
+                download_errors.append(str(exc))
+        prepared.append(
+            {
+                "id": work.get("id"),
+                "doi": work.get("doi"),
+                "title": work.get("title"),
+                "publication_year": work.get("publication_year"),
+                "cited_by_count": work.get("cited_by_count"),
+                "referenced_works_count": work.get("referenced_works_count"),
+                "open_access": work.get("open_access"),
+                "abstract_inverted_index": work.get("abstract_inverted_index"),
+                "pdf_url": pdf_url,
+                "pdf_path": pdf_path,
+            }
+        )
+
+    payload = {
+        "query": query,
+        "count": len(prepared),
+        "works": prepared,
+        "download_errors": download_errors or None,
+    }
+    response = WorkspaceResponse.ok(payload=payload, message="OpenAlex fetch completed.", source="openalex")
+    _emit_response(response, json_output)
+
+    if not json_output:
+        typer.echo("")
+        for item in prepared:
+            label = "[pdf]" if item.get("pdf_path") else "[no-pdf]"
+            typer.echo(f"{label} {item.get('title') or '(untitled)'} — cites: {item.get('cited_by_count')}")
+        if download_errors:
+            typer.echo("")
+            typer.echo("Download issues:")
+            for err in download_errors:
+                typer.echo(f"- {err}")
+
+
 # --------------------------------------------------------------------------- Citation study (OpenAlex)
 
 
@@ -491,7 +589,30 @@ def citation_study(
     limit: int = typer.Option(20, "--limit", min=1, max=200, help="Maximum number of works to evaluate."),
     sample: bool = typer.Option(False, "--sample", help="Use OpenAlex sampling instead of sorted results."),
     sort: str = typer.Option("cited_by_count:desc", "--sort", help="OpenAlex sort expression (default: cited_by_count:desc)."),
-    model: Optional[str] = typer.Option(None, "--model", help="Override the OpenAI model for LLM scoring."),
+    works_file: Optional[Path] = typer.Option(
+        None,
+        "--works-file",
+        path_type=Path,
+        exists=True,
+        dir_okay=False,
+        readable=True,
+        resolve_path=True,
+        help="JSON file containing pre-fetched works metadata (from openalex-fetch or custom source).",
+    ),
+    pdf_dir: Optional[Path] = typer.Option(
+        None,
+        "--pdf-dir",
+        path_type=Path,
+        exists=True,
+        file_okay=False,
+        resolve_path=True,
+        help="Directory containing PDFs to auto-match against works by DOI/ID/title.",
+    ),
+    model: Optional[str] = typer.Option(
+        None,
+        "--model",
+        help="(Deprecated) Override the OpenAI model for LLM scoring; defaults to secrets configuration.",
+    ),
     temperature: float = typer.Option(0.2, "--temperature", help="Sampling temperature for LLM scoring."),
     pdf: Optional[Path] = typer.Option(
         None,
@@ -516,52 +637,81 @@ def citation_study(
 
     client = OpenAlexClient()
     router = ModelRouter()
-    assessor = LLMCitationAssessor(router=router, model=model, temperature=temperature)
+    assessor = LLMCitationAssessor(router=router, temperature=temperature)
 
-    figure_notes: Optional[str] = None
-    if pdf:
+    if works_file:
         try:
-            mineru = MineruClient(api_url_override=mineru_url, token_override=mineru_token, timeout=float(mineru_timeout))
-            mineru_prompt = "请逐条概括文档中的每个图表/配图，重点说明图表类型、呈现的数据或流程，以及它们如何帮助读者理解核心贡献。" "不要臆造不存在的图表。输出简洁的要点列表。"
-            mineru_result = mineru.recognize_with_images(pdf, prompt=mineru_prompt)
-            figure_payload = mineru_result.get("result")
-            if isinstance(figure_payload, list):
-                figure_descriptions: list[str] = []
-                for entry in figure_payload:
-                    if not isinstance(entry, Mapping):
-                        continue
-                    text = entry.get("text")
-                    if not isinstance(text, str):
-                        continue
-                    if text.strip().lower().startswith("image description"):
-                        page = entry.get("page_number")
-                        prefix = f"[p{page}] " if page is not None else ""
-                        figure_descriptions.append(prefix + text.strip())
-                if figure_descriptions:
-                    figure_notes = "\n".join(figure_descriptions)
-                else:
-                    figure_notes = json.dumps(figure_payload, ensure_ascii=False)[:2000]
-        except MineruClientError as exc:
-            response = WorkspaceResponse.error("Mineru 图表摘要失败，但 OpenAlex 结果仍可返回。", errors=(str(exc),), source="citation-study")
+            works = _load_works_file(works_file)
+        except ValueError as exc:
+            response = WorkspaceResponse.error("Failed to load works from file.", errors=(str(exc),), source="citation-study")
             _emit_response(response, json_output)
-            figure_notes = None
-
-    try:
-        works = client.search_works(
-            query,
-            since_year=since_year,
-            per_page=limit,
-            sample=sample,
-            sort=sort,
-            fields=("id", "title", "publication_year", "cited_by_count", "referenced_works_count", "abstract_inverted_index", "open_access"),
-        )
-    except OpenAlexClientError as exc:
-        response = WorkspaceResponse.error("OpenAlex query failed.", errors=(str(exc),), source="citation-study")
-        _emit_response(response, json_output)
-        raise typer.Exit(code=1) from exc
+            raise typer.Exit(code=2) from exc
+    else:
+        try:
+            works = client.search_works(
+                query,
+                since_year=since_year,
+                per_page=limit,
+                sample=sample,
+                sort=sort,
+                fields=(
+                    "id",
+                    "title",
+                    "doi",
+                    "publication_year",
+                    "cited_by_count",
+                    "referenced_works_count",
+                    "abstract_inverted_index",
+                    "open_access",
+                    "primary_location",
+                    "locations",
+                ),
+            )
+        except OpenAlexClientError as exc:
+            response = WorkspaceResponse.error("OpenAlex query failed.", errors=(str(exc),), source="citation-study")
+            _emit_response(response, json_output)
+            raise typer.Exit(code=1) from exc
 
     classified = []
     for work in works:
+        figure_notes: Optional[str] = None
+        pdf_path: Optional[Path] = None
+        if pdf and len(works) == 1:
+            pdf_path = pdf
+        elif isinstance(work, Mapping) and isinstance(work.get("pdf_path"), str):
+            candidate = Path(work["pdf_path"])
+            if candidate.exists():
+                pdf_path = candidate
+        elif pdf_dir:
+            pdf_path = _find_pdf_for_work(work, pdf_dir)
+
+        if pdf_path:
+            try:
+                mineru = MineruClient(api_url_override=mineru_url, token_override=mineru_token, timeout=float(mineru_timeout))
+                mineru_prompt = "请逐条概括文档中的每个图表/配图，重点说明图表类型、呈现的数据或流程，以及它们如何帮助读者理解核心贡献。" "不要臆造不存在的图表。输出简洁的要点列表。"
+                mineru_result = mineru.recognize_with_images(pdf_path, prompt=mineru_prompt)
+                figure_payload = mineru_result.get("result")
+                if isinstance(figure_payload, list):
+                    figure_descriptions: list[str] = []
+                    for entry in figure_payload:
+                        if not isinstance(entry, Mapping):
+                            continue
+                        text = entry.get("text")
+                        if not isinstance(text, str):
+                            continue
+                        if text.strip().lower().startswith("image description"):
+                            page = entry.get("page_number")
+                            prefix = f"[p{page}] " if page is not None else ""
+                            figure_descriptions.append(prefix + text.strip())
+                    if figure_descriptions:
+                        figure_notes = "\n".join(figure_descriptions)
+                    else:
+                        figure_notes = json.dumps(figure_payload, ensure_ascii=False)[:2000]
+            except MineruClientError as exc:
+                response = WorkspaceResponse.error("Mineru 图表摘要失败，但 OpenAlex 结果仍可返回。", errors=(str(exc),), source="citation-study")
+                _emit_response(response, json_output)
+                figure_notes = None
+
         heuristic = client.classify_work(work)
         try:
             llm_result = assessor.assess(work, heuristic=heuristic, figure_notes=figure_notes)
@@ -608,6 +758,74 @@ def citation_study(
             )
         typer.echo("")
         typer.echo("Use --json for structured results including rationales and baseline heuristics.")
+
+
+# --------------------------------------------------------------------------- Helpers
+
+
+def _load_works_file(path: Path) -> list[Mapping[str, Any]]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid JSON in works file: {exc}") from exc
+    if isinstance(data, Mapping) and "works" in data:
+        works = data.get("works")
+    else:
+        works = data
+    if not isinstance(works, list):
+        raise ValueError("Works file must contain a JSON array or an object with a 'works' array.")
+    normalized: list[Mapping[str, Any]] = []
+    for item in works:
+        if isinstance(item, Mapping):
+            normalized.append(item)
+        else:
+            raise ValueError("Each work entry must be a JSON object.")
+    return normalized
+
+
+def _slugify(value: str) -> str:
+    cleaned = re.sub(r"[^a-zA-Z0-9]+", "-", value).strip("-").lower()
+    return cleaned or "work"
+
+
+def _make_work_slug(work: Mapping[str, Any], fallback: str) -> str:
+    doi = work.get("doi")
+    if isinstance(doi, str) and doi:
+        return _slugify(doi.replace("/", "_"))
+    work_id = work.get("id")
+    if isinstance(work_id, str) and work_id:
+        return _slugify(work_id.rsplit("/", 1)[-1])
+    title = work.get("title")
+    if isinstance(title, str) and title:
+        return _slugify(title)
+    return _slugify(fallback)
+
+
+def _find_pdf_for_work(work: Mapping[str, Any], pdf_dir: Path) -> Optional[Path]:
+    """Match a PDF in pdf_dir by DOI, OpenAlex ID, or title."""
+
+    candidates: list[str] = []
+    doi = work.get("doi")
+    if isinstance(doi, str):
+        candidates.append(doi)
+        candidates.append(doi.replace("/", "_"))
+    work_id = work.get("id")
+    if isinstance(work_id, str):
+        candidates.append(work_id.rsplit("/", 1)[-1])
+    title = work.get("title")
+    if isinstance(title, str):
+        candidates.append(title)
+
+    normalized_candidates = [_slugify(cand) for cand in candidates if cand]
+    if not normalized_candidates:
+        return None
+
+    pdf_files = list(pdf_dir.glob("*.pdf"))
+    for pdf_path in pdf_files:
+        name_key = _slugify(pdf_path.stem)
+        if any(key and key in name_key for key in normalized_candidates):
+            return pdf_path
+    return None
 
 
 # --------------------------------------------------------------------------- MCP
