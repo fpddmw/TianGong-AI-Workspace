@@ -223,34 +223,22 @@ class LLMCitationAssessor:
             temperature=self.temperature,
         )
         system_prompt = (
-            "你是一名文献计量分析员，目标是根据论文的元数据、摘要要点与图表表现，对论文类型（综述/研究/其他）进行判断，并给出未来引用潜力评级。"
-            "请综合发表年份、新颖性、摘要信息密度、参考文献丰富度、是否开放获取，以及图表对可读性的支持。"
+            "你是一名文献计量分析员，目标是根据论文的元数据（不包含下载/引用计数）、摘要要点与图表表现，对论文类型（综述/研究/其他）进行判断，并给出未来引用潜力评级。"
+            "不要使用或推断具体的引用/下载数；请综合发表年份、新颖性、摘要信息密度、是否开放获取，以及图表对可读性的支持。"
             "输出 JSON，字段包括: article_type(综述|研究|其他), citation_category(high|medium|low), score(0-100), rationale(中文要点数组)。"
-            "评分提示：综述类若覆盖面广、引用多、图表梳理清晰可倾向高分；研究类若方法/实验充分且图表解释力强、引用在同龄段领先可加分。"
+            "评分提示：综述类若覆盖面广、图表梳理清晰可倾向高分；研究类若方法/实验充分且图表解释力强、在同龄段具备可传播性则可加分。"
         )
 
         abstract_text = _flatten_abstract(work.get("abstract_inverted_index"))
         metadata = {
             "title": work.get("title"),
             "publication_year": work.get("publication_year"),
-            "cited_by_count": work.get("cited_by_count"),
-            "referenced_works_count": work.get("referenced_works_count"),
-            "open_access": bool(work.get("open_access", {}).get("is_oa")) if isinstance(work.get("open_access"), Mapping) else False,
             "abstract_excerpt": abstract_text[:1200] if abstract_text else "",
             "type": work.get("type"),
+            "open_access": bool(work.get("open_access", {}).get("is_oa")) if isinstance(work.get("open_access"), Mapping) else False,
         }
 
-        heuristic_note = None
-        if heuristic:
-            heuristic_note = {
-                "baseline_category": heuristic.get("category"),
-                "baseline_score": heuristic.get("score"),
-                "baseline_rationale": heuristic.get("rationale"),
-            }
-
         user_payload: MutableMapping[str, Any] = {"metadata": metadata}
-        if heuristic_note:
-            user_payload["heuristic_hint"] = heuristic_note
         if figure_notes:
             user_payload["figure_notes"] = figure_notes
 
