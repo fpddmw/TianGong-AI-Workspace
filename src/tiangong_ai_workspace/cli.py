@@ -428,6 +428,7 @@ def mineru_with_images(
     model: Optional[str] = typer.Option(None, "--model", help="Optional model name forwarded to Mineru."),
     url: Optional[str] = typer.Option(None, "--url", help="Override the Mineru endpoint URL."),
     token: Optional[str] = typer.Option(None, "--token", help="Override the Mineru bearer token."),
+    timeout: int = typer.Option(300, "--timeout", help="Timeout in seconds for Mineru requests."),
     output: Optional[Path] = typer.Option(
         None,
         "--output",
@@ -440,7 +441,7 @@ def mineru_with_images(
     """Call the Mineru PDF image extraction API."""
 
     try:
-        client = MineruClient(api_url_override=url, token_override=token)
+        client = MineruClient(api_url_override=url, token_override=token, timeout=float(timeout))
         result = client.recognize_with_images(
             file,
             prompt=prompt,
@@ -504,6 +505,11 @@ def citation_study(
     ),
     mineru_url: Optional[str] = typer.Option(None, "--mineru-url", help="Override Mineru endpoint when using --pdf."),
     mineru_token: Optional[str] = typer.Option(None, "--mineru-token", help="Override Mineru token when using --pdf."),
+    mineru_timeout: int = typer.Option(
+        300,
+        "--mineru-timeout",
+        help="Timeout in seconds for Mineru requests (default: 300 to tolerate slow responses).",
+    ),
     json_output: bool = typer.Option(False, "--json", help="Emit a machine-readable JSON response."),
 ) -> None:
     """Fetch recent papers from OpenAlex and classify citation potential (high/medium/low)."""
@@ -515,7 +521,7 @@ def citation_study(
     figure_notes: Optional[str] = None
     if pdf:
         try:
-            mineru = MineruClient(api_url_override=mineru_url, token_override=mineru_token)
+            mineru = MineruClient(api_url_override=mineru_url, token_override=mineru_token, timeout=float(mineru_timeout))
             mineru_prompt = "请逐条概括文档中的每个图表/配图，重点说明图表类型、呈现的数据或流程，以及它们如何帮助读者理解核心贡献。" "不要臆造不存在的图表。输出简洁的要点列表。"
             mineru_result = mineru.recognize_with_images(pdf, prompt=mineru_prompt)
             figure_payload = mineru_result.get("result")

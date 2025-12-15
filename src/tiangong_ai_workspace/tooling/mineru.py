@@ -25,7 +25,7 @@ class MineruClient:
     secrets: Optional[Secrets] = None
     api_url_override: Optional[str] = None
     token_override: Optional[str] = None
-    timeout: float = 60.0
+    timeout: float = 300.0
     retries: int = 3
     retry_backoff: float = 1.5
     http_client: Optional[httpx.Client] = None
