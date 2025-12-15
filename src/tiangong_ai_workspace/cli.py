@@ -559,7 +559,7 @@ def openalex_fetch(
         )
 
     payload = {
-        "query": query,
+        "query": None,
         "count": len(prepared),
         "works": prepared,
         "download_errors": download_errors or None,
@@ -584,13 +584,8 @@ def openalex_fetch(
 
 @app.command("citation-study")
 def citation_study(
-    query: str = typer.Argument(..., help="Search query to find related papers."),
-    since_year: Optional[int] = typer.Option(2019, "--since-year", help="Only include works published on/after this year."),
-    limit: int = typer.Option(20, "--limit", min=1, max=200, help="Maximum number of works to evaluate."),
-    sample: bool = typer.Option(False, "--sample", help="Use OpenAlex sampling instead of sorted results."),
-    sort: str = typer.Option("cited_by_count:desc", "--sort", help="OpenAlex sort expression (default: cited_by_count:desc)."),
-    works_file: Optional[Path] = typer.Option(
-        None,
+    works_file: Path = typer.Option(
+        ...,
         "--works-file",
         path_type=Path,
         exists=True,
@@ -639,38 +634,12 @@ def citation_study(
     router = ModelRouter()
     assessor = LLMCitationAssessor(router=router, temperature=temperature)
 
-    if works_file:
-        try:
-            works = _load_works_file(works_file)
-        except ValueError as exc:
-            response = WorkspaceResponse.error("Failed to load works from file.", errors=(str(exc),), source="citation-study")
-            _emit_response(response, json_output)
-            raise typer.Exit(code=2) from exc
-    else:
-        try:
-            works = client.search_works(
-                query,
-                since_year=since_year,
-                per_page=limit,
-                sample=sample,
-                sort=sort,
-                fields=(
-                    "id",
-                    "title",
-                    "doi",
-                    "publication_year",
-                    "cited_by_count",
-                    "referenced_works_count",
-                    "abstract_inverted_index",
-                    "open_access",
-                    "primary_location",
-                    "locations",
-                ),
-            )
-        except OpenAlexClientError as exc:
-            response = WorkspaceResponse.error("OpenAlex query failed.", errors=(str(exc),), source="citation-study")
-            _emit_response(response, json_output)
-            raise typer.Exit(code=1) from exc
+    try:
+        works = _load_works_file(works_file)
+    except ValueError as exc:
+        response = WorkspaceResponse.error("Failed to load works from file.", errors=(str(exc),), source="citation-study")
+        _emit_response(response, json_output)
+        raise typer.Exit(code=2) from exc
 
     classified = []
     for work in works:
@@ -740,12 +709,7 @@ def citation_study(
         }
         classified.append(combined)
 
-    payload = {
-        "query": query,
-        "provider": "openalex",
-        "count": len(classified),
-        "works": classified,
-    }
+    payload = {"query": None, "provider": "openalex", "count": len(classified), "works": classified}
     response = WorkspaceResponse.ok(payload=payload, message="Citation potential analysis completed.", source="citation-study")
     _emit_response(response, json_output)
 

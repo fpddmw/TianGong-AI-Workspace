@@ -63,7 +63,7 @@ uv run tiangong-workspace agents list       # 查看自主智能体与运行时�
 uv run tiangong-workspace knowledge retrieve "查询关键词"  # 直接检索 Dify 知识库
 uv run tiangong-workspace embeddings generate "示例文本"   # 调用 OpenAI 兼容 embedding 服务
 uv run tiangong-workspace openalex-fetch "large language model" --limit 20 --download-dir ./papers  # 预取元数据+尝试下载 PDF
-uv run tiangong-workspace citation-study "large language model" --since-year 2020 --limit 30  # 调用 OpenAlex 分类引用潜力
+uv run tiangong-workspace citation-study --works-file ./openalex_results.json  # 基于本地元数据进行引用潜力评估
 uv run tiangong-workspace mineru-with-images ./doc.pdf --prompt "提取图表含义"  # 调用 Mineru PDF 图片解析 API
 ```
 
