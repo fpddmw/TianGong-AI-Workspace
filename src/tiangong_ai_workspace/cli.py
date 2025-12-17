@@ -657,7 +657,9 @@ def citation_study(
         if pdf_path:
             try:
                 mineru = MineruClient(api_url_override=mineru_url, token_override=mineru_token, timeout=float(mineru_timeout))
-                mineru_prompt = "请逐条概括文档中的每个图表/配图，重点说明图表类型、呈现的数据或流程，以及它们如何帮助读者理解核心贡献。" "不要臆造不存在的图表。输出简洁的要点列表。"
+                mineru_prompt = (
+                    "请逐条概括文档中的每个图表/配图，重点说明图表类型、呈现的数据或流程，以及它们如何帮助读者理解核心贡献。" "不要臆造不存在的图表。输出简洁的要点列表。请使用英文回答。"
+                )
                 mineru_result = mineru.recognize_with_images(pdf_path, prompt=mineru_prompt)
                 figure_payload = mineru_result.get("result")
                 if isinstance(figure_payload, list):
@@ -706,6 +708,8 @@ def citation_study(
             "llm_rationale": llm_result["rationale"],
             "heuristic_category": heuristic["category"],
             "heuristic_score": heuristic["score"],
+            "figure_notes_used": figure_notes,
+            "pdf_path_used": str(pdf_path) if pdf_path else None,
         }
         classified.append(combined)
 
@@ -732,8 +736,14 @@ def _load_works_file(path: Path) -> list[Mapping[str, Any]]:
         data = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         raise ValueError(f"Invalid JSON in works file: {exc}") from exc
-    if isinstance(data, Mapping) and "works" in data:
-        works = data.get("works")
+    works = None
+    if isinstance(data, Mapping):
+        if "works" in data:
+            works = data.get("works")
+        elif "payload" in data and isinstance(data.get("payload"), Mapping) and "works" in data["payload"]:
+            works = data["payload"]["works"]
+        else:
+            works = data
     else:
         works = data
     if not isinstance(works, list):
@@ -768,26 +778,38 @@ def _make_work_slug(work: Mapping[str, Any], fallback: str) -> str:
 def _find_pdf_for_work(work: Mapping[str, Any], pdf_dir: Path) -> Optional[Path]:
     """Match a PDF in pdf_dir by DOI, OpenAlex ID, or title."""
 
+    def _candidate_slugs(value: str) -> list[str]:
+        variants = {value}
+        variants.add(value.replace("/", "_"))
+        variants.add(value.replace("/", "-"))
+        variants.add(value.replace(".", "-"))
+        if "/" in value:
+            variants.add(value.rsplit("/", 1)[-1])
+        return [_slugify(v) for v in variants if v]
+
     candidates: list[str] = []
     doi = work.get("doi")
     if isinstance(doi, str):
-        candidates.append(doi)
-        candidates.append(doi.replace("/", "_"))
+        candidates.extend(_candidate_slugs(doi))
     work_id = work.get("id")
     if isinstance(work_id, str):
-        candidates.append(work_id.rsplit("/", 1)[-1])
+        candidates.extend(_candidate_slugs(work_id))
     title = work.get("title")
     if isinstance(title, str):
-        candidates.append(title)
+        candidates.extend(_candidate_slugs(title))
+    pdf_url = work.get("pdf_url")
+    if isinstance(pdf_url, str):
+        candidates.extend(_candidate_slugs(pdf_url))
 
-    normalized_candidates = [_slugify(cand) for cand in candidates if cand]
+    normalized_candidates = [c for c in candidates if c]
     if not normalized_candidates:
         return None
 
-    pdf_files = list(pdf_dir.glob("*.pdf"))
+    pdf_files = list(pdf_dir.glob("*.pdf")) + list(pdf_dir.glob("*.PDF"))
     for pdf_path in pdf_files:
         name_key = _slugify(pdf_path.stem)
-        if any(key and key in name_key for key in normalized_candidates):
+        full_key = _slugify(pdf_path.name)
+        if any(key and (key in name_key or key in full_key) for key in normalized_candidates):
             return pdf_path
     return None
 

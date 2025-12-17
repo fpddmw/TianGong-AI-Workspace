@@ -11,7 +11,6 @@ from typing import Any, Iterable, Mapping, MutableMapping, Optional, Sequence
 import httpx
 from httpx import HTTPError
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_core.outputs import ChatResult
 from langchain_openai import ChatOpenAI
 
 from .llm import ModelRouter
@@ -225,7 +224,7 @@ class LLMCitationAssessor:
         system_prompt = (
             "你是一名文献计量分析员，目标是根据论文的元数据（不包含下载/引用计数）、摘要要点与图表表现，对论文类型（综述/研究/其他）进行判断，并给出未来引用潜力评级。"
             "不要使用或推断具体的引用/下载数；请综合发表年份、新颖性、摘要信息密度、是否开放获取，以及图表对可读性的支持。"
-            "输出 JSON，字段包括: article_type(综述|研究|其他), citation_category(high|medium|low), score(0-100), rationale(中文要点数组)。"
+            "输出 JSON，字段包括: article_type(综述|研究|其他), citation_category(high|medium|low), score(0-100), rationale(英文要点数组)。"
             "评分提示：综述类若覆盖面广、图表梳理清晰可倾向高分；研究类若方法/实验充分且图表解释力强、在同龄段具备可传播性则可加分。"
         )
 
@@ -255,8 +254,16 @@ class LLMCitationAssessor:
             ),
         ]
 
-        result: ChatResult = chat_model.invoke(messages, response_format={"type": "json_object"})
-        content = result.generations[0].message.content if result.generations else result.content  # type: ignore[attr-defined]
+        raw = chat_model.invoke(messages, response_format={"type": "json_object"})
+        content: Any
+        if hasattr(raw, "generations"):  # ChatResult
+            result = raw  # type: ignore[assignment]
+            content = result.generations[0].message.content if result.generations else result.content  # type: ignore[attr-defined]
+        elif hasattr(raw, "content"):  # AIMessage or similar
+            content = getattr(raw, "content")
+        else:  # pragma: no cover - defensive
+            content = raw
+
         if isinstance(content, str):
             try:
                 parsed = json.loads(content)
