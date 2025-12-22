@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,6 +13,7 @@ import httpx
 from httpx import HTTPError
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
+from pypdf import PdfReader
 
 from .llm import ModelRouter
 
@@ -118,6 +120,48 @@ class OpenAlexClient:
         except HTTPError as exc:
             raise OpenAlexClientError(f"Failed to download PDF from {url}: {exc}") from exc
         return dest
+
+    def search_by_doi(self, doi: str) -> Mapping[str, Any]:
+        """Lookup a single work by DOI."""
+
+        if not doi.strip():
+            raise OpenAlexClientError("DOI cannot be empty.")
+        params: MutableMapping[str, Any] = {"filter": f"doi:{doi}"}
+        url = f"{self.base_url}/works"
+        try:
+            response = self._get(url, params=params)
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise OpenAlexClientError(f"OpenAlex request failed: {exc}") from exc
+        try:
+            payload = response.json()
+        except ValueError as exc:  # pragma: no cover - defensive fallback
+            raise OpenAlexClientError("OpenAlex returned invalid JSON.") from exc
+        results = payload.get("results") or []
+        if not results:
+            raise OpenAlexClientError(f"No OpenAlex record found for DOI '{doi}'.")
+        return results[0]
+
+    def extract_doi_from_pdf(self, pdf_path: Path) -> str:
+        """Heuristically extract a DOI from a PDF's text."""
+
+        if not pdf_path.exists() or not pdf_path.is_file():
+            raise OpenAlexClientError(f"PDF not found: {pdf_path}")
+        try:
+            reader = PdfReader(str(pdf_path))
+        except Exception as exc:  # pragma: no cover - defensive
+            raise OpenAlexClientError(f"Failed to read PDF {pdf_path}: {exc}") from exc
+
+        doi_pattern = re.compile(r"10\.\d{4,9}/[-._;()/:A-Za-z0-9]+", re.IGNORECASE)
+        for page in reader.pages:
+            try:
+                text = page.extract_text() or ""
+            except Exception:
+                continue
+            match = doi_pattern.search(text)
+            if match:
+                return match.group(0)
+        raise OpenAlexClientError("DOI not found in PDF.")
 
     def classify_work(self, work: Mapping[str, Any]) -> Mapping[str, Any]:
         """Assign a coarse citation potential category with rationale."""

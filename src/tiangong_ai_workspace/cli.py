@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Mapping, MutableMapping, Optional, Sequence
 
 import typer
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 
 from . import __version__
 from .agents import DocumentWorkflowConfig, DocumentWorkflowType, run_document_workflow
@@ -28,9 +28,11 @@ from .tooling import WorkspaceResponse, list_registered_tools
 from .tooling.config import CLIToolConfig, load_workspace_config
 from .tooling.dify import DifyKnowledgeBaseClient, DifyKnowledgeBaseError
 from .tooling.embeddings import OpenAICompatibleEmbeddingClient, OpenAIEmbeddingError
+from .tooling.highly_cited import fetch_journal_citation_bands
 from .tooling.llm import ModelPurpose, ModelRouter
 from .tooling.mineru import MineruClient, MineruClientError
 from .tooling.openalex import LLMCitationAssessor, OpenAlexClient, OpenAlexClientError
+from .tooling.supabase import SupabaseClient, SupabaseClientError
 from .tooling.tavily import TavilySearchClient, TavilySearchError
 
 app = typer.Typer(help="Tiangong AI Workspace CLI for managing local AI tooling.")
@@ -487,11 +489,22 @@ def mineru_with_images(
 
 @app.command("openalex-fetch")
 def openalex_fetch(
-    query: str = typer.Argument(..., help="Search query to find related papers via OpenAlex."),
+    query: Optional[str] = typer.Argument(None, help="Search query to find related papers via OpenAlex."),
     since_year: Optional[int] = typer.Option(2019, "--since-year", help="Only include works published on/after this year."),
     limit: int = typer.Option(20, "--limit", min=1, max=200, help="Maximum number of works to fetch."),
     sample: bool = typer.Option(False, "--sample", help="Use OpenAlex sampling instead of sorted results."),
     sort: str = typer.Option("cited_by_count:desc", "--sort", help="OpenAlex sort expression (default: cited_by_count:desc)."),
+    doi: Optional[str] = typer.Option(None, "--doi", help="Fetch a single work by DOI."),
+    pdf: Optional[Path] = typer.Option(
+        None,
+        "--pdf",
+        path_type=Path,
+        exists=True,
+        dir_okay=False,
+        readable=True,
+        resolve_path=True,
+        help="Extract DOI from a PDF and fetch the corresponding OpenAlex record.",
+    ),
     download_dir: Optional[Path] = typer.Option(
         None,
         "--download-dir",
@@ -505,37 +518,67 @@ def openalex_fetch(
     """Fetch OpenAlex works metadata (optionally downloading PDFs for later analysis)."""
 
     client = OpenAlexClient()
-    try:
-        works = client.search_works(
-            query,
-            since_year=since_year,
-            per_page=limit,
-            sample=sample,
-            sort=sort,
-            fields=(
-                "id",
-                "doi",
-                "title",
-                "publication_year",
-                "cited_by_count",
-                "referenced_works_count",
-                "abstract_inverted_index",
-                "open_access",
-                "primary_location",
-                "locations",
-            ),
-        )
-    except OpenAlexClientError as exc:
-        response = WorkspaceResponse.error("OpenAlex query failed.", errors=(str(exc),), source="openalex")
-        _emit_response(response, json_output)
-        raise typer.Exit(code=1) from exc
-
+    works: list[Mapping[str, Any]] = []
     download_errors: list[str] = []
+    pdf_used: Optional[str] = None
+    doi_used: Optional[str] = None
+
+    if pdf:
+        pdf_used = str(pdf)
+        try:
+            doi_used = client.extract_doi_from_pdf(pdf)
+        except OpenAlexClientError as exc:
+            response = WorkspaceResponse.error("Failed to extract DOI from PDF.", errors=(str(exc),), source="openalex")
+            _emit_response(response, json_output)
+            raise typer.Exit(code=2) from exc
+
+    if doi or doi_used:
+        target_doi = (doi or doi_used or "").strip()
+        try:
+            work = client.search_by_doi(target_doi)
+            work = dict(work)
+            if pdf_used:
+                work["pdf_path"] = pdf_used
+            works = [work]
+        except OpenAlexClientError as exc:
+            response = WorkspaceResponse.error("OpenAlex DOI lookup failed.", errors=(str(exc),), source="openalex")
+            _emit_response(response, json_output)
+            raise typer.Exit(code=3) from exc
+    else:
+        if not query or not query.strip():
+            response = WorkspaceResponse.error("Provide either --doi/--pdf or a non-empty query.", source="openalex")
+            _emit_response(response, json_output)
+            raise typer.Exit(code=4)
+        try:
+            works = client.search_works(
+                query,
+                since_year=since_year,
+                per_page=limit,
+                sample=sample,
+                sort=sort,
+                fields=(
+                    "id",
+                    "doi",
+                    "title",
+                    "publication_year",
+                    "cited_by_count",
+                    "referenced_works_count",
+                    "abstract_inverted_index",
+                    "open_access",
+                    "primary_location",
+                    "locations",
+                ),
+            )
+        except OpenAlexClientError as exc:
+            response = WorkspaceResponse.error("OpenAlex query failed.", errors=(str(exc),), source="openalex")
+            _emit_response(response, json_output)
+            raise typer.Exit(code=1) from exc
+
     prepared: list[Mapping[str, Any]] = []
     for idx, work in enumerate(works, start=1):
         pdf_url = client.extract_pdf_url(work)
-        pdf_path: Optional[str] = None
-        if download_dir and pdf_url:
+        pdf_path: Optional[str] = work.get("pdf_path") if isinstance(work, Mapping) else None
+        if download_dir and pdf_url and not pdf_path:
             slug = _make_work_slug(work, fallback=str(idx))
             dest = download_dir / f"{slug}.pdf"
             try:
@@ -559,7 +602,9 @@ def openalex_fetch(
         )
 
     payload = {
-        "query": None,
+        "query": query,
+        "doi": doi_used or doi,
+        "pdf_used": pdf_used,
         "count": len(prepared),
         "works": prepared,
         "download_errors": download_errors or None,
@@ -626,6 +671,11 @@ def citation_study(
         "--mineru-timeout",
         help="Timeout in seconds for Mineru requests (default: 300 to tolerate slow responses).",
     ),
+    include_mineru_result: bool = typer.Option(
+        False,
+        "--include-mineru-result",
+        help="Include Mineru raw figure extraction result in the output for investigation.",
+    ),
     json_output: bool = typer.Option(False, "--json", help="Emit a machine-readable JSON response."),
 ) -> None:
     """Fetch recent papers from OpenAlex and classify citation potential (high/medium/low)."""
@@ -654,6 +704,7 @@ def citation_study(
         elif pdf_dir:
             pdf_path = _find_pdf_for_work(work, pdf_dir)
 
+        raw_mineru_result: Optional[Mapping[str, Any]] = None
         if pdf_path:
             try:
                 mineru = MineruClient(api_url_override=mineru_url, token_override=mineru_token, timeout=float(mineru_timeout))
@@ -662,6 +713,7 @@ def citation_study(
                 )
                 mineru_result = mineru.recognize_with_images(pdf_path, prompt=mineru_prompt)
                 figure_payload = mineru_result.get("result")
+                raw_mineru_result = mineru_result if include_mineru_result else None
                 if isinstance(figure_payload, list):
                     figure_descriptions: list[str] = []
                     for entry in figure_payload:
@@ -710,6 +762,7 @@ def citation_study(
             "heuristic_score": heuristic["score"],
             "figure_notes_used": figure_notes,
             "pdf_path_used": str(pdf_path) if pdf_path else None,
+            "mineru_result": raw_mineru_result if include_mineru_result else None,
         }
         classified.append(combined)
 
@@ -729,6 +782,132 @@ def citation_study(
 
 
 # --------------------------------------------------------------------------- Helpers
+@app.command("journal-bands-analyze")
+def journal_bands_analyze(
+    journal_issn: str = typer.Option(..., "--issn", help="Target journal ISSN."),
+    journal_name: str = typer.Option(..., "--journal", help="Target journal name for exact matching."),
+    publish_year: Optional[int] = typer.Option(None, "--year", help="Optional publication year filter."),
+    band_limit: int = typer.Option(200, "--band-limit", min=10, max=400, help="Max papers to include per band after percentile split."),
+    max_records: int = typer.Option(800, "--max-records", min=50, max=2000, help="Maximum records to fetch from OpenAlex."),
+    top_k: int = typer.Option(5, "--top-k", help="Supabase sci_search topK for fulltext retrieval."),
+    est_k: int = typer.Option(50, "--est-k", help="Supabase sci_search estK for fulltext retrieval."),
+    output: Path = typer.Option(
+        Path("journal_bands_summary.md"),
+        "--output",
+        "-o",
+        path_type=Path,
+        dir_okay=False,
+        resolve_path=True,
+        help="Path to write the Markdown summary.",
+    ),
+) -> None:
+    """
+    Fetch high/middle/low citation bands for a journal and summarise strengths/weaknesses via LLM.
+
+    Uses Supabase sci_search (configured in secrets) to retrieve text by DOI, then prompts the LLM
+    for pros/cons per article without storing fulltext locally.
+    """
+
+    typer.echo("Fetching citation bands from OpenAlex...")
+    bands = fetch_journal_citation_bands(
+        journal_issn=journal_issn,
+        journal_name=journal_name,
+        publish_year=publish_year,
+        band_limit=band_limit,
+        max_records=max_records,
+    )
+
+    supabase = SupabaseClient()
+    router = ModelRouter()
+    chat_model = router.create_chat_model(purpose="general", temperature=0.2)
+
+    sections: list[tuple[str, list[Mapping[str, Any]]]] = [
+        ("High citation (top)", bands.high),
+        ("Middle citation (mid band)", bands.middle),
+        ("Low citation (bottom)", bands.low),
+    ]
+
+    lines: list[str] = []
+    lines.append(f"# Journal analysis: {journal_name} (ISSN {journal_issn})")
+    if publish_year:
+        lines.append(f"- Publication year filter: {publish_year}")
+    lines.append(f"- Band limit: {band_limit} (after percentile split), max records considered: {max_records}")
+    lines.append(f"- Citation thresholds: p25={bands.thresholds.get('p25', 0):.1f}, p75={bands.thresholds.get('p75', 0):.1f}")
+    lines.append(f"- Supabase sci_search: topK={top_k}, estK={est_k}")
+    lines.append("")
+
+    for section_title, works in sections:
+        lines.append(f"## {section_title}")
+        if not works:
+            lines.append("_No records found._")
+            lines.append("")
+            continue
+        for work in works:
+            doi = work.get("doi")
+            title = work.get("title") or "(untitled)"
+            citation_count = work.get("cited_by_count")
+            year = work.get("publication_year")
+            try:
+                fulltext = supabase.fetch_content(str(doi or ""), query="总结这篇文章的主要内容", top_k=top_k, est_k=est_k)
+            except SupabaseClientError as exc:
+                rationale = f"Supabase 获取全文失败: {exc}"
+                lines.append(f"- **{title}** ({year}, cites: {citation_count}) DOI: {doi or 'n/a'}")
+                lines.append(f"  - {rationale}")
+                continue
+
+            content_text = json.dumps(fulltext, ensure_ascii=False)[:8000]
+            messages = [
+                SystemMessage(
+                    content=(
+                        "You are summarizing factors that may explain citation performance. "
+                        "Given metadata and extracted fulltext (no images), list strengths and weaknesses. "
+                        "Do NOT invent citation counts or download stats. Keep concise bullet points."
+                    )
+                ),
+                HumanMessage(
+                    content=json.dumps(
+                        {
+                            "title": title,
+                            "doi": doi,
+                            "year": year,
+                            "cited_by_count_hint": citation_count,
+                            "band": section_title,
+                            "fulltext_excerpt": content_text,
+                        },
+                        ensure_ascii=False,
+                    )
+                ),
+            ]
+            try:
+                resp = chat_model.invoke(messages, response_format={"type": "json_object"})
+                content = getattr(resp, "content", None) or (resp.generations[0].message.content if hasattr(resp, "generations") else None)
+                summary = json.loads(content) if isinstance(content, str) else content
+            except Exception:
+                summary = None
+
+            lines.append(f"- **{title}** ({year}, cites: {citation_count}) DOI: {doi or 'n/a'}")
+            if isinstance(summary, Mapping):
+                strengths = summary.get("strengths") or summary.get("pros") or summary.get("advantages")
+                weaknesses = summary.get("weaknesses") or summary.get("cons") or summary.get("risks")
+                if strengths:
+                    if isinstance(strengths, str):
+                        strengths = [strengths]
+                    lines.append("  - 优势:")
+                    for item in strengths:
+                        lines.append(f"    - {item}")
+                if weaknesses:
+                    if isinstance(weaknesses, str):
+                        weaknesses = [weaknesses]
+                    lines.append("  - 不足:")
+                    for item in weaknesses:
+                        lines.append(f"    - {item}")
+            else:
+                lines.append("  - 无法解析 LLM 输出，原始响应略。")
+            lines.append("")
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text("\n".join(lines), encoding="utf-8")
+    typer.echo(f"Summary written to {output}")
 
 
 def _load_works_file(path: Path) -> list[Mapping[str, Any]]:
