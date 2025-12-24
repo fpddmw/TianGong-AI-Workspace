@@ -9,10 +9,13 @@ Edit this file to tailor the workspace to your own toolchain.
 from __future__ import annotations
 
 import json
+import math
+import random
 import re
 import shutil
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Mapping, MutableMapping, Optional, Sequence
 
@@ -812,6 +815,12 @@ def journal_bands_analyze(
     def _log(msg: str) -> None:
         typer.echo(f"[journal-bands] {msg}")
 
+    def _sample_band(items: list[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+        if not items:
+            return []
+        sample_size = max(1, int(math.ceil(len(items) * 0.1)))
+        return random.sample(items, min(sample_size, len(items)))
+
     _log("Fetching citation bands from OpenAlex...")
     bands = fetch_journal_citation_bands(
         journal_issn=journal_issn,
@@ -886,16 +895,19 @@ def journal_bands_analyze(
             with output.open("a", encoding="utf-8") as handle:
                 handle.write("\n".join(section_lines))
             continue
+        sampled_works = _sample_band(works)
+        section_lines.append(f"_Sampled {len(sampled_works)} of {len(works)} papers (10% random)._")
         with output.open("a", encoding="utf-8") as handle:
             handle.write("\n".join(section_lines) + "\n")
-        _log(f"Processing {len(works)} papers in {section_title}...")
-        for idx, work in enumerate(works, start=1):
+
+        _log(f"Processing {len(sampled_works)} sampled papers (source pool: {len(works)}) in {section_title}...")
+
+        def _analyze_work(task: tuple[int, Mapping[str, Any]]) -> tuple[int, list[str]]:
+            idx, work = task
             doi = work.get("doi")
             title = work.get("title") or "(untitled)"
             citation_count = work.get("cited_by_count")
             year = work.get("publication_year")
-            if idx % 20 == 1 or idx == len(works):
-                _log(f"{section_title}: {idx}/{len(works)}")
             try:
                 fulltext = supabase.fetch_content(str(doi or ""), query="请尽可能均匀的在全文中选择十个段落", top_k=top_k, est_k=est_k)
             except SupabaseClientError as exc:
@@ -905,14 +917,12 @@ def journal_bands_analyze(
                     f"  - {rationale}",
                     "",
                 ]
-                with output.open("a", encoding="utf-8") as handle:
-                    handle.write("\n".join(entry_lines))
-                continue
+                return idx, entry_lines
 
             content_text = json.dumps(fulltext, ensure_ascii=False)
             system_prompt = (
                 "Role\n"
-                "你是一位资深的学术计量学专家与期刊审稿人。你的任务是分析学术论文的特征，并探讨这些特征的表现。"
+                "你是一位资深的学术计量学专家与期刊审稿人。你的任务是分析学术论文的特征，并探讨这些特征与其引文表现，即引用数及其引用带（High/Middle/Low）之间的潜在逻辑关系，为构建“投稿指导规则库”提供结构化素材。"
                 "Task"
                 "请根据待分析内容，从以下五个维度对文章进行深度特征分析，并输出 JSON 格式的评价："
                 "选题前沿性：是否涉及热点、新兴领域或交叉学科。"
@@ -930,7 +940,15 @@ def journal_bands_analyze(
 
             messages = [
                 SystemMessage(content=system_prompt),
-                HumanMessage(content=("待分析内容\n" f"- 标题: {title}\n" f"- 作者: {work.get('authorships') or '未知'}\n" f"- 摘要/片段: {content_text}\n" "请按照要求的 JSON 格式输出。")),
+                HumanMessage(content=(
+                    "待分析内容\n"
+                    f"- 引用表现: 该期刊中引用排名位于{section_title}，引用量为{citation_count}\n"
+                    f"- 标题: {title}\n" 
+                    f"- 作者: {work.get('authorships') or '未知'}\n" 
+                    f"- 摘要/片段: {content_text}\n" 
+                    f'请基于以上信息，分析为何该文章会拥有这样的引用表现，并按照要求的 JSON 格式输出。'
+                    )
+                ),
             ]
             summary: Mapping[str, Any] | None = None
             raw_text: str | None = None
@@ -980,8 +998,17 @@ def journal_bands_analyze(
                 entry_lines.append("  - 原始 LLM 输出:")
                 entry_lines.append(f"    - {raw_text}")
             entry_lines.append("")
+            return idx, entry_lines
+
+        tasks = list(enumerate(sampled_works, start=1))
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            results = list(executor.map(_analyze_work, tasks))
+
+        for idx, entry_lines in sorted(results, key=lambda item: item[0]):
             with output.open("a", encoding="utf-8") as handle:
                 handle.write("\n".join(entry_lines))
+            if idx % 5 == 0 or idx == len(sampled_works):
+                _log(f"{section_title}: {idx}/{len(sampled_works)} written")
 
     typer.echo(f"Summary streaming written to {output}")
 

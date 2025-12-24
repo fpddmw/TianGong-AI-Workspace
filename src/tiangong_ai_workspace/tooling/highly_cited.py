@@ -40,6 +40,19 @@ def _is_target_journal(work: Mapping[str, object], target_journal: str, target_i
     return False
 
 
+def _is_valid_work(work: Mapping[str, object]) -> bool:
+    title = work.get("title")
+    if not isinstance(title, str):
+        return False
+    normalized_title = title.strip().lower()
+    if normalized_title.startswith("corrigendum to"):
+        return False
+    if normalized_title.startswith("editorial board"):
+        return False
+    doi = work.get("doi")
+    return isinstance(doi, str) and bool(doi.strip())
+
+
 def _fetch_all_works(journal_issn: str, journal_name: str, publish_year: Optional[int], max_records: int = 800) -> list[Mapping[str, object]]:
     """Fetch works for a journal, sorted by citations descending."""
 
@@ -63,7 +76,7 @@ def _fetch_all_works(journal_issn: str, journal_name: str, publish_year: Optiona
         if not results:
             break
         for work in results:
-            if _is_target_journal(work, journal_name, journal_issn):
+            if _is_target_journal(work, journal_name, journal_issn) and _is_valid_work(work):
                 works.append(work)
                 if len(works) >= max_records:
                     break

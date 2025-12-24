@@ -62,7 +62,7 @@ All three must pass before sharing updates.
 - `uv run tiangong-workspace knowledge retrieve "<query>"` — call the Dify knowledge base API without MCP；可用 `--search-method`、`--reranking/--no-reranking`、`--reranking-provider/--reranking-model`、`--score-threshold`、`--semantic-weight` 与 `--metadata` 快速配置 Dify `retrieval_model` 与元数据过滤。
 - `uv run tiangong-workspace embeddings generate "<text>"` — 调用 OpenAI 兼容 embedding 服务，支持批量文本、`--model/--json`。
 - `uv run tiangong-workspace openalex-fetch "topic" --limit 20 --download-dir ./papers` — 预取 OpenAlex 元数据并尝试下载 PDF。
-- `uv run tiangong-workspace journal-bands-analyze --issn <issn> --journal "<name>"` — Supabase 取样全文后用 OpenAI `response_format`(`json_schema`) 严格输出五维度特征分析。
+- `uv run tiangong-workspace journal-bands-analyze --issn <issn> --journal "<name>"` — Supabase 取样全文后用 OpenAI `response_format`(`json_schema`) 严格输出五维度特征分析，默认每档位随机抽样 10% 并发处理（≤10 线程），会自动过滤无 DOI 及标题包含 “Corrigendum to …”/“Editorial Board” 的记录。
 - `uv run tiangong-workspace citation-study "large language model" --since-year 2020 --limit 30 --works-file ./openalex_results.json --pdf-dir ./papers` — 调用 OpenAlex + OpenAI 区分综述/研究并在图表摘要（自动抽取“Image Description”段落）加持下按高/中/低引用潜力分类。
 - `uv run tiangong-workspace mineru-with-images ./file.pdf --prompt "解析图表"` — 调用 Mineru PDF 图片解析 API，支持 MinIO 落盘与模型透传。
 - `uv run tiangong-workspace mcp services|tools|invoke` — inspect and call configured MCP services.
