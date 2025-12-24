@@ -21,6 +21,7 @@ from typing import Any, Mapping, MutableMapping, Optional, Sequence
 
 import typer
 from langchain_core.messages import HumanMessage, SystemMessage
+from pypdf import PdfReader
 
 from . import __version__
 from .agents import DocumentWorkflowConfig, DocumentWorkflowType, run_document_workflow
@@ -632,15 +633,20 @@ def openalex_fetch(
 
 @app.command("citation-study")
 def citation_study(
-    works_file: Path = typer.Option(
-        ...,
+    works_file: Optional[Path] = typer.Option(
+        None,
         "--works-file",
         path_type=Path,
         exists=True,
         dir_okay=False,
         readable=True,
         resolve_path=True,
-        help="JSON file containing pre-fetched works metadata (from openalex-fetch or custom source).",
+        help="Optional JSON file containing pre-fetched works metadata (from openalex-fetch or custom source).",
+    ),
+    doi: list[str] = typer.Option(
+        [],
+        "--doi",
+        help="One or more DOIs; when provided, OpenAlex 元数据会自动拉取，无需先运行 openalex-fetch。",
     ),
     pdf_dir: Optional[Path] = typer.Option(
         None,
@@ -651,6 +657,14 @@ def citation_study(
         resolve_path=True,
         help="Directory containing PDFs to auto-match against works by DOI/ID/title.",
     ),
+    mode: str = typer.Option(
+        "supabase",
+        "--mode",
+        help="Fulltext ingestion mode: 'supabase' (use Supabase sci_search) or 'pdf' (extract text from local PDFs).",
+        show_default=True,
+    ),
+    supabase_top_k: int = typer.Option(10, "--supabase-top-k", help="Supabase sci_search topK for fulltext retrieval."),
+    supabase_est_k: int = typer.Option(80, "--supabase-est-k", help="Supabase sci_search estK for fulltext retrieval."),
     model: Optional[str] = typer.Option(
         None,
         "--model",
@@ -667,6 +681,7 @@ def citation_study(
         resolve_path=True,
         help="Optional PDF file to summarize figures via Mineru and feed into scoring.",
     ),
+    use_mineru: bool = typer.Option(False, "--use-mineru", help="Call Mineru to extract figure notes when a PDF is available."),
     mineru_url: Optional[str] = typer.Option(None, "--mineru-url", help="Override Mineru endpoint when using --pdf."),
     mineru_token: Optional[str] = typer.Option(None, "--mineru-token", help="Override Mineru token when using --pdf."),
     mineru_timeout: int = typer.Option(
@@ -679,40 +694,106 @@ def citation_study(
         "--include-mineru-result",
         help="Include Mineru raw figure extraction result in the output for investigation.",
     ),
+    max_fulltext_chars: int = typer.Option(
+        30000,
+        "--max-fulltext-chars",
+        help="Cap the amount of fulltext (Supabase/PDF) sent to the LLM to avoid overly long prompts.",
+    ),
     json_output: bool = typer.Option(False, "--json", help="Emit a machine-readable JSON response."),
 ) -> None:
     """Fetch recent papers from OpenAlex and classify citation potential (high/medium/low)."""
 
+    mode_normalized = mode.lower()
+    if mode_normalized not in {"supabase", "pdf"}:
+        response = WorkspaceResponse.error("模式仅支持 'supabase' 或 'pdf'。", source="citation-study")
+        _emit_response(response, json_output)
+        raise typer.Exit(code=2)
+
     client = OpenAlexClient()
     router = ModelRouter()
     assessor = LLMCitationAssessor(router=router, temperature=temperature)
+    supabase: Optional[SupabaseClient] = None
+    if mode_normalized == "supabase":
+        try:
+            supabase = SupabaseClient()
+        except SupabaseClientError as exc:
+            response = WorkspaceResponse.error(
+                "Supabase 未配置，请更新 .sercrets/secrets.toml 或切换为 --mode pdf。",
+                errors=(str(exc),),
+                source="citation-study",
+            )
+            _emit_response(response, json_output)
+            raise typer.Exit(code=2) from exc
 
-    try:
-        works = _load_works_file(works_file)
-    except ValueError as exc:
-        response = WorkspaceResponse.error("Failed to load works from file.", errors=(str(exc),), source="citation-study")
+    works: list[Mapping[str, Any]] = []
+    input_errors: list[str] = []
+    input_source = "works-file"
+    if works_file:
+        try:
+            works = _load_works_file(works_file)
+        except ValueError as exc:
+            response = WorkspaceResponse.error("Failed to load works from file.", errors=(str(exc),), source="citation-study")
+            _emit_response(response, json_output)
+            raise typer.Exit(code=2) from exc
+    elif doi:
+        input_source = "doi"
+        for value in doi:
+            try:
+                record = client.search_by_doi(value)
+                works.append(record)
+            except OpenAlexClientError as exc:
+                input_errors.append(f"{value}: {exc}")
+        if not works:
+            response = WorkspaceResponse.error(
+                "未能从 OpenAlex 获取任何元数据，请检查 DOI 是否正确。",
+                errors=tuple(input_errors) if input_errors else None,
+                source="citation-study",
+            )
+            _emit_response(response, json_output)
+            raise typer.Exit(code=2)
+    else:
+        response = WorkspaceResponse.error("请提供 --works-file 或至少一个 --doi。", source="citation-study")
         _emit_response(response, json_output)
-        raise typer.Exit(code=2) from exc
+        raise typer.Exit(code=2)
 
     classified = []
     for work in works:
         figure_notes: Optional[str] = None
-        pdf_path: Optional[Path] = None
-        if pdf and len(works) == 1:
-            pdf_path = pdf
-        elif isinstance(work, Mapping) and isinstance(work.get("pdf_path"), str):
-            candidate = Path(work["pdf_path"])
-            if candidate.exists():
-                pdf_path = candidate
-        elif pdf_dir:
-            pdf_path = _find_pdf_for_work(work, pdf_dir)
-
         raw_mineru_result: Optional[Mapping[str, Any]] = None
-        if pdf_path:
+        pdf_path: Optional[Path] = None
+        need_pdf = mode_normalized == "pdf" or use_mineru
+        if need_pdf:
+            if pdf and len(works) == 1:
+                pdf_path = pdf
+            elif isinstance(work, Mapping) and isinstance(work.get("pdf_path"), str):
+                candidate = Path(work["pdf_path"])
+                if candidate.exists():
+                    pdf_path = candidate
+            elif pdf_dir:
+                pdf_path = _find_pdf_for_work(work, pdf_dir)
+
+            title_hint = work.get("title") or work.get("doi") or work.get("id") or "(unknown)"
+            if mode_normalized == "pdf" and not pdf_path:
+                response = WorkspaceResponse.error(
+                    f"PDF 模式需要找到对应文件: {title_hint}",
+                    source="citation-study",
+                )
+                _emit_response(response, json_output)
+                raise typer.Exit(code=2)
+            if use_mineru and mode_normalized == "supabase" and not pdf_path:
+                response = WorkspaceResponse.error(
+                    f"Supabase 模式启用 Mineru 时必须提供 PDF（--pdf 或 --pdf-dir）。缺少文件: {title_hint}",
+                    source="citation-study",
+                )
+                _emit_response(response, json_output)
+                raise typer.Exit(code=2)
+
+        if use_mineru and pdf_path:
             try:
                 mineru = MineruClient(api_url_override=mineru_url, token_override=mineru_token, timeout=float(mineru_timeout))
                 mineru_prompt = (
-                    "请逐条概括文档中的每个图表/配图，重点说明图表类型、呈现的数据或流程，以及它们如何帮助读者理解核心贡献。" "不要臆造不存在的图表。输出简洁的要点列表。请使用英文回答。"
+                    "请逐条概括文档中的每个图表/配图，重点说明图表类型、呈现的数据或流程，以及它们如何帮助读者理解核心贡献。"
+                    "不要臆造不存在的图表。输出简洁的要点列表。请使用英文回答。"
                 )
                 mineru_result = mineru.recognize_with_images(pdf_path, prompt=mineru_prompt)
                 figure_payload = mineru_result.get("result")
@@ -732,44 +813,106 @@ def citation_study(
                     if figure_descriptions:
                         figure_notes = "\n".join(figure_descriptions)
                     else:
-                        figure_notes = json.dumps(figure_payload, ensure_ascii=False)[:2000]
+                        figure_notes = json.dumps(figure_payload, ensure_ascii=False)
+                else:
+                    figure_notes = json.dumps(figure_payload, ensure_ascii=False)
             except MineruClientError as exc:
                 response = WorkspaceResponse.error("Mineru 图表摘要失败，但 OpenAlex 结果仍可返回。", errors=(str(exc),), source="citation-study")
                 _emit_response(response, json_output)
                 figure_notes = None
 
         heuristic = client.classify_work(work)
+        fulltext_used: Optional[str] = None
+        fulltext_source = None
+        fulltext_error: Optional[str] = None
+
+        if mode_normalized == "supabase":
+            doi = work.get("doi") or ""
+            if not isinstance(doi, str) or not doi.strip():
+                fulltext_error = "Supabase 模式需要 DOI。"
+            elif supabase is None:
+                fulltext_error = "Supabase 未初始化。"
+            else:
+                try:
+                    supabase_result = supabase.fetch_content(str(doi), query="请尽可能均匀的在全文中选择十个段落", top_k=supabase_top_k, est_k=supabase_est_k)
+                    fulltext_used = _stringify_supabase_result(supabase_result, max_chars=max_fulltext_chars)
+                    fulltext_source = "supabase"
+                except SupabaseClientError as exc:
+                    fulltext_error = str(exc)
+        else:
+            if pdf_path is None:
+                fulltext_error = "PDF 模式缺少 PDF，无法提取全文。"
+            else:
+                try:
+                    fulltext_used = _extract_pdf_text(pdf_path, max_chars=max_fulltext_chars)
+                    fulltext_source = "pdf"
+                except OpenAlexClientError as exc:
+                    fulltext_error = str(exc)
+
         try:
-            llm_result = assessor.assess(work, heuristic=heuristic, figure_notes=figure_notes)
+            llm_result = assessor.assess(
+                work,
+                heuristic=heuristic,
+                fulltext=fulltext_used,
+                fulltext_source=fulltext_source or mode_normalized,
+                figure_notes=_trim_text(figure_notes, max_fulltext_chars // 2) if figure_notes else None,
+            )
         except Exception as exc:  # pragma: no cover - defensive: fall back to heuristic
+            band_value = (heuristic.get("category") if heuristic else "middle") if isinstance(heuristic, Mapping) else "middle"
+            band_mapping = {"high": "High", "middle": "Middle", "low": "Low"}
+            mapped_band = band_mapping.get(str(band_value).lower(), "Middle")
+            fallback_reason = f"LLM 评分失败，回退启发式: {exc}"
             llm_result = {
-                "article_type": "其他",
-                "citation_category": heuristic["category"],
-                "score": heuristic["score"],
-                "rationale": [f"LLM 评分失败，回退启发式: {exc}"],
+                "prediction": {
+                    "estimated_band": mapped_band,
+                    "confidence_score": "40%",
+                    "key_reason": fallback_reason,
+                },
+                "dimension_scores": {
+                    "topic": {"score": 2, "eval": "中", "analysis": fallback_reason},
+                    "methodology": {"score": 2, "eval": "中", "analysis": fallback_reason},
+                    "data": {"score": 2, "eval": "中", "analysis": fallback_reason},
+                    "impact": {"score": 2, "eval": "中", "analysis": fallback_reason},
+                },
+                "action_plan": ["提供 PDF 全文或检查 Supabase 配置后重试，以获得准确的 RCR 引文带评估。"],
+                "rcr_match_index": "0%",
                 "raw": None,
             }
-        combined = {
+
+        combined: MutableMapping[str, Any] = {
             "id": work.get("id"),
             "title": work.get("title"),
+            "doi": work.get("doi"),
             "publication_year": work.get("publication_year"),
             "cited_by_count": work.get("cited_by_count"),
             "reference_count": work.get("referenced_works_count"),
             "open_access": heuristic.get("open_access"),
             "abstract_words": heuristic.get("abstract_words"),
-            "article_type": llm_result["article_type"],
-            "final_category": llm_result["citation_category"],
-            "llm_score": llm_result["score"],
-            "llm_rationale": llm_result["rationale"],
             "heuristic_category": heuristic["category"],
             "heuristic_score": heuristic["score"],
-            "figure_notes_used": figure_notes,
+            "prediction": llm_result.get("prediction"),
+            "dimension_scores": llm_result.get("dimension_scores"),
+            "action_plan": llm_result.get("action_plan"),
+            "rcr_match_index": llm_result.get("rcr_match_index"),
+            "fulltext_mode": mode_normalized,
+            "fulltext_source": fulltext_source or mode_normalized,
+            "fulltext_excerpt_used": _trim_text(fulltext_used, 800) if fulltext_used else None,
+            "fulltext_error": fulltext_error,
+            "figure_notes_used": _trim_text(figure_notes, 800) if figure_notes else None,
             "pdf_path_used": str(pdf_path) if pdf_path else None,
             "mineru_result": raw_mineru_result if include_mineru_result else None,
+            # "raw_llm": llm_result.get("raw"),
         }
         classified.append(combined)
 
-    payload = {"query": None, "provider": "openalex", "count": len(classified), "works": classified}
+    payload = {
+        "query": None,
+        "provider": "openalex",
+        "input_source": input_source,
+        "input_errors": input_errors or None,
+        "count": len(classified),
+        "works": classified,
+    }
     response = WorkspaceResponse.ok(payload=payload, message="Citation potential analysis completed.", source="citation-study")
     _emit_response(response, json_output)
 
@@ -777,11 +920,15 @@ def citation_study(
         typer.echo("")
         for item in classified:
             title = item.get("title") or "(untitled)"
+            band = (item.get("prediction") or {}).get("estimated_band") or "n/a"
+            match_idx = item.get("rcr_match_index") or "n/a"
+            source_mode = item.get("fulltext_mode") or "n/a"
             typer.echo(
-                f"[{item['final_category']}] {item['article_type']} | {title} ({item.get('publication_year') or 'n/a'}) " f"— cites: {item['cited_by_count']}, llm_score: {item['llm_score']}"
+                f"[{band}] {title} ({item.get('publication_year') or 'n/a'}) — cites: {item.get('cited_by_count')}, "
+                f"mode: {source_mode}, RCR match: {match_idx}"
             )
         typer.echo("")
-        typer.echo("Use --json for structured results including rationales and baseline heuristics.")
+        typer.echo("Use --json for structured results including dimension scores, action plans, and baseline heuristics.")
 
 
 # --------------------------------------------------------------------------- Helpers
@@ -1057,6 +1204,58 @@ def _make_work_slug(work: Mapping[str, Any], fallback: str) -> str:
     return _slugify(fallback)
 
 
+def _trim_text(value: Optional[str], max_chars: int) -> Optional[str]:
+    if value is None:
+        return None
+    text = value.strip()
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars] + f"\n...[truncated {len(text) - max_chars} chars]"
+
+
+def _stringify_supabase_result(result: Mapping[str, Any], max_chars: int) -> str:
+    if "data" in result and isinstance(result.get("data"), list):
+        parts: list[str] = []
+        for item in result["data"]:
+            if not isinstance(item, Mapping):
+                continue
+            fragment = item.get("content") or item.get("text") or item.get("chunk")
+            if fragment:
+                parts.append(str(fragment))
+        if parts:
+            combined = "\n\n".join(parts)
+            trimmed = _trim_text(combined, max_chars)
+            if trimmed:
+                return trimmed
+    fallback = json.dumps(result, ensure_ascii=False)
+    return _trim_text(fallback, max_chars) or ""
+
+
+def _extract_pdf_text(pdf_path: Path, max_chars: int = 12000) -> str:
+    if not pdf_path.exists():
+        raise OpenAlexClientError(f"PDF not found: {pdf_path}")
+    try:
+        reader = PdfReader(str(pdf_path))
+    except Exception as exc:  # pragma: no cover - defensive
+        raise OpenAlexClientError(f"Failed to read PDF {pdf_path}: {exc}") from exc
+
+    snippets: list[str] = []
+    for page in reader.pages:
+        try:
+            text = page.extract_text() or ""
+        except Exception:
+            continue
+        cleaned = text.strip()
+        if cleaned:
+            snippets.append(cleaned)
+        if len(" ".join(snippets)) >= max_chars:
+            break
+    combined = "\n".join(snippets).strip()
+    if not combined:
+        raise OpenAlexClientError(f"未能从 PDF 提取文本: {pdf_path}")
+    return _trim_text(combined, max_chars) or ""
+
+
 def _find_pdf_for_work(work: Mapping[str, Any], pdf_dir: Path) -> Optional[Path]:
     """Match a PDF in pdf_dir by DOI, OpenAlex ID, or title."""
 
@@ -1225,8 +1424,16 @@ def _extract_final_response(result: Any) -> str:
 
 def _emit_response(response: WorkspaceResponse, json_output: bool) -> None:
     if json_output:
-        typer.echo(response.to_json())
-        return
+        # Write JSON bytes directly to stdout.buffer using UTF-8 to avoid
+        # encoding issues when users redirect CLI output to files or pipes.
+        try:
+            sys.stdout.buffer.write((response.to_json() + "\n").encode("utf-8"))
+            sys.stdout.buffer.flush()
+            return
+        except Exception:
+            # Fallback to typer.echo if direct buffer write fails for some reason.
+            typer.echo(response.to_json())
+            return
 
     typer.echo(response.message)
     if response.status != "success" and response.errors:

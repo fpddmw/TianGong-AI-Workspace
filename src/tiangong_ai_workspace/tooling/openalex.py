@@ -257,20 +257,125 @@ class LLMCitationAssessor:
         work: Mapping[str, Any],
         *,
         heuristic: Mapping[str, Any] | None = None,
+        fulltext: Optional[str] = None,
+        fulltext_source: Optional[str] = None,
         figure_notes: Optional[str] = None,
     ) -> Mapping[str, Any]:
-        """Call the configured LLM to classify review vs research and rescore citation potential."""
+        """Call the configured LLM to score citation potential with RCR-specific rubric."""
 
         chat_model: ChatOpenAI = self.router.create_chat_model(
             purpose="general",
             temperature=self.temperature,
         )
-        system_prompt = (
-            "你是一名文献计量分析员，目标是根据论文的元数据（不包含下载/引用计数）、摘要要点与图表表现，对论文类型（综述/研究/其他）进行判断，并给出未来引用潜力评级。"
-            "不要使用或推断具体的引用/下载数；请综合发表年份、新颖性、摘要信息密度、是否开放获取，以及图表对可读性的支持。"
-            "输出 JSON，字段包括: article_type(综述|研究|其他), citation_category(high|medium|low), score(0-100), rationale(英文要点数组)。"
-            "评分提示：综述类若覆盖面广、图表梳理清晰可倾向高分；研究类若方法/实验充分且图表解释力强、在同龄段具备可传播性则可加分。"
-        )
+        system_prompt_parts = [
+            "Role 你是一位深耕于《Resources, Conservation & Recycling》(RCR) 期刊的资深审稿专家与学术计量学分析师,能够通过分析文章的摘要、方法论和数据特征，准确预判其两年后的引用水平并提供针对性的修改建议。",
+            "Goal 根据用户提供的论文初稿信息（标题、摘要、方法、数据描述），基于“RCR 核心规则库”进行多维度打分，预测引文表现，并给出旨在提升“引文潜力”的改进方案。",
+            "RCR Core Rulebook (核心规则库)",
+            "1. 选题战略维度 (Topic Strategic Fit)",
+            " - 【规则 1.1：跨学科耦合】高引论文必须关联两个以上的前沿领域。核心关键词：AI/机器学习、ESG 风险、全球能源转型、供应链安全、碳中和路径、关键金属安全。",
+            " - 【规则 1.2：尺度溢价】全球(Global) > 国家(National) > 跨区域 > 单一城市 > 单一工厂。",
+            " - 【规则 1.3：通用性陷阱】若研究对象为特定地区，必须在方法论上提出“可迁移框架”或“普适性机理”，否则视为 Low Band 倾向。",
+            "2. 方法论严谨性维度 (Methodological Rigor)",
+            " - 【规则 2.1：闭环评价原则】材料/工程类文章必须包含“结构设计-性能评估-LCA(环境)-LCC(经济)”的完整闭环。",
+            " - 【规则 2.2：算法壁垒】涉及 AI/ML 时，必须包含：5种以上算法对比、嵌套交叉验证、模型可解释性分析（如 SHAP 值）。",
+            " - 【规则 2.3：定量化门槛】定性研究（访谈/政策评论）若无系统编码或情景模拟（如系统动力学/SD），被引潜力通常极低。",
+            "3. 数据与证据维度 (Data & Evidence Utility)",
+            " - 【规则 3.1：数据权威性】优先使用 UN Comtrade, USGS, IEA, S&P Global 等权威二阶数据，或大规模卫星遥感数据。",
+            " - 【规则 3.2：时效性红线】政策分析类数据滞后不得超过 3 年。",
+            " - 【规则 3.3：可视化标准】鼓励使用高质量 Sankey 图（物质流）、GIS 热力图和复杂的关联网络图。",
+            "4. 影响力与决策支撑 (Impact & Decision Support)",
+            " - 【规则 4.1：政策锚点】结论必须直接呼应具体国际条约或政策框架（如欧盟绿色协议、巴塞尔公约等）。",
+            " - 【规则 4.2：行动导向】拒绝“加强教育”等空洞建议，必须提供量化的、可操作的政策参数或改进点。",
+            "Evaluation Logic (评估逻辑)",
+            " - High Band：在 1.1, 1.2, 2.1, 4.1 规则中至少有三项表现卓越（优）。",
+            " - Middle Band：表现规范，但缺乏全球尺度或方法论创新较弱。",
+            " - Low Band：选题过窄、方法陈旧、或数据时效性差。",
+            "Constraints",
+            "评价需尖锐且客观，不要使用模棱两可的学术辞令。",
+            "必须直接指出违反了哪条 RCR Core Rulebook 中的具体规则。",
+            "语言统一使用中文。",
+        ]
+        if figure_notes:
+            system_prompt_parts.append(
+                "附加要求：已提供图表拆解，请结合图表所揭示的流程/数据/实验设计判断其是否支撑论文结论，"
+                "并在方法、数据或影响力维度中体现图表的解释力或缺陷。"
+            )
+        system_prompt = "\n".join(system_prompt_parts)
+
+        response_schema: Mapping[str, Any] = {
+            "name": "rcr_citation_assessment",
+            "schema": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "prediction": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {
+                            "estimated_band": {"type": "string", "enum": ["High", "Middle", "Low"]},
+                            "confidence_score": {"type": "string", "pattern": r"^\d{1,3}%$"},
+                            "key_reason": {"type": "string"},
+                        },
+                        "required": ["estimated_band", "confidence_score", "key_reason"],
+                    },
+                    "dimension_scores": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {
+                            "topic": {
+                                "type": "object",
+                                "additionalProperties": False,
+                                "properties": {
+                                    "score": {"type": "integer", "minimum": 1, "maximum": 3},
+                                    "eval": {"type": "string", "enum": ["优", "中", "差"]},
+                                    "analysis": {"type": "string"},
+                                },
+                                "required": ["score", "eval", "analysis"],
+                            },
+                            "methodology": {
+                                "type": "object",
+                                "additionalProperties": False,
+                                "properties": {
+                                    "score": {"type": "integer", "minimum": 1, "maximum": 3},
+                                    "eval": {"type": "string", "enum": ["优", "中", "差"]},
+                                    "analysis": {"type": "string"},
+                                },
+                                "required": ["score", "eval", "analysis"],
+                            },
+                            "data": {
+                                "type": "object",
+                                "additionalProperties": False,
+                                "properties": {
+                                    "score": {"type": "integer", "minimum": 1, "maximum": 3},
+                                    "eval": {"type": "string", "enum": ["优", "中", "差"]},
+                                    "analysis": {"type": "string"},
+                                },
+                                "required": ["score", "eval", "analysis"],
+                            },
+                            "impact": {
+                                "type": "object",
+                                "additionalProperties": False,
+                                "properties": {
+                                    "score": {"type": "integer", "minimum": 1, "maximum": 3},
+                                    "eval": {"type": "string", "enum": ["优", "中", "差"]},
+                                    "analysis": {"type": "string"},
+                                },
+                                "required": ["score", "eval", "analysis"],
+                            },
+                        },
+                        "required": ["topic", "methodology", "data", "impact"],
+                    },
+                    "action_plan": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": 1,
+                    },
+                    "rcr_match_index": {"type": "string", "pattern": r"^\d{1,3}%$"},
+                },
+                "required": ["prediction", "dimension_scores", "action_plan", "rcr_match_index"],
+            },
+            "strict": True,
+        }
 
         abstract_text = _flatten_abstract(work.get("abstract_inverted_index"))
         metadata = {
@@ -281,9 +386,16 @@ class LLMCitationAssessor:
             "open_access": bool(work.get("open_access", {}).get("is_oa")) if isinstance(work.get("open_access"), Mapping) else False,
         }
 
-        user_payload: MutableMapping[str, Any] = {"metadata": metadata}
+        user_payload: MutableMapping[str, Any] = {
+            "metadata": metadata,
+            "fulltext_source": fulltext_source or "unspecified",
+        }
+        if fulltext:
+            user_payload["fulltext_excerpt"] = fulltext
         if figure_notes:
             user_payload["figure_notes"] = figure_notes
+        if heuristic:
+            user_payload["baseline"] = heuristic
 
         messages = [
             SystemMessage(content=system_prompt),
@@ -298,37 +410,37 @@ class LLMCitationAssessor:
             ),
         ]
 
-        raw = chat_model.invoke(messages, response_format={"type": "json_object"})
+        raw = chat_model.invoke(messages, response_format={"type": "json_schema", "json_schema": response_schema})
         content: Any
-        if hasattr(raw, "generations"):  # ChatResult
-            result = raw  # type: ignore[assignment]
-            content = result.generations[0].message.content if result.generations else result.content  # type: ignore[attr-defined]
-        elif hasattr(raw, "content"):  # AIMessage or similar
-            content = getattr(raw, "content")
-        else:  # pragma: no cover - defensive
-            content = raw
+        parsed: Any = None
+        if hasattr(raw, "parsed") and getattr(raw, "parsed") is not None:  # OpenAI JSON schema response
+            parsed = getattr(raw, "parsed")
+        if parsed is None:
+            if hasattr(raw, "generations"):  # ChatResult
+                result = raw  # type: ignore[assignment]
+                content = result.generations[0].message.content if result.generations else result.content  # type: ignore[attr-defined]
+            elif hasattr(raw, "content"):  # AIMessage or similar
+                content = getattr(raw, "content")
+            else:  # pragma: no cover - defensive
+                content = raw
 
-        if isinstance(content, str):
-            try:
-                parsed = json.loads(content)
-            except json.JSONDecodeError as exc:
-                raise OpenAlexClientError(f"LLM 返回的 JSON 无法解析: {exc}") from exc
-        elif isinstance(content, Mapping):
-            parsed = dict(content)
-        else:  # pragma: no cover - defensive fallback
+            if isinstance(content, str):
+                try:
+                    parsed = json.loads(content)
+                except json.JSONDecodeError as exc:
+                    raise OpenAlexClientError(f"LLM 返回的 JSON 无法解析: {exc}") from exc
+            elif isinstance(content, Mapping):
+                parsed = dict(content)
+            else:  # pragma: no cover - defensive fallback
+                raise OpenAlexClientError("LLM 返回的内容格式未知，期望 JSON 对象。")
+
+        if not isinstance(parsed, Mapping):
             raise OpenAlexClientError("LLM 返回的内容格式未知，期望 JSON 对象。")
 
-        article_type = str(parsed.get("article_type") or "其他")
-        citation_category = str(parsed.get("citation_category") or "medium").lower()
-        score = float(parsed.get("score") or 50.0)
-        rationale = parsed.get("rationale") or []
-        if not isinstance(rationale, list):
-            rationale = [str(rationale)]
-
         return {
-            "article_type": article_type,
-            "citation_category": citation_category,
-            "score": score,
-            "rationale": rationale,
+            "prediction": parsed.get("prediction"),
+            "dimension_scores": parsed.get("dimension_scores"),
+            "action_plan": parsed.get("action_plan"),
+            "rcr_match_index": parsed.get("rcr_match_index"),
             "raw": parsed,
         }

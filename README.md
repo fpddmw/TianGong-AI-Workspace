@@ -68,7 +68,7 @@ uv run tiangong-workspace mineru-with-images ./doc.pdf --prompt "提取图表含
 ```
 
 所有支持的命令都提供 `--json` 选项，可输出结构化响应，方便被其他智能体消费。
-`journal-bands-analyze` 的期刊分带特征分析命令已使用 OpenAI `response_format`（`json_schema`）强约束输出字段，确保五个维度的评估结构化可机读。
+`journal-bands-analyze` 的期刊分带特征分析命令已使用 OpenAI `response_format`（`json_schema`）强约束输出字段，确保五个维度的评估结构化可机读；默认随机抽样每个档位 10% 文章并发处理（最多 10 线程），自动过滤无 DOI 以及标题含 “Corrigendum to …”/“Editorial Board” 的记录，在样本量大的期刊上仍能快速生成报告。
 
 ### 工作区配置
 - `pyproject.toml` 中的 `[tool.tiangong.workspace.cli_tools]` / `[tool.tiangong.workspace.tool_registry]` 控制 CLI 检测与 Agent Catalog，无需修改源码即可扩充。
@@ -158,22 +158,29 @@ uv run tiangong-workspace embeddings generate "text A" "text B" \
 命令默认输出摘要信息，追加 `--json` 会返回包含 `embeddings`、`model`、`dimensions`、`usage` 的结构化 `WorkspaceResponse`，方便直接写入向量数据库或串接 Agent 工具。若连接到无鉴权的本地模型，可将 `api_key` 置为空字符串即可兼容。
 
 ## 引用潜力分析（OpenAlex）
-`openalex-fetch` 用于前置拉取元数据并可选下载 PDF，便于离线处理。`citation-study` 支持直接读取 `--works-file`（来自 `openalex-fetch` 或自定义 JSON）并可通过 `--pdf-dir` 批量匹配对应 PDF；也可在只有一篇文章时用 `--pdf` 指定单个文件。LLM 将区分综述/研究并按高/中/低三个档位给出引用潜力标签与理由。启发式指标（发表年份/引用数/参考文献/是否 OA/摘要长度）仅作提示，最终分类由 OpenAI 模型结合摘要与图表信息决策：
+`openalex-fetch` 用于前置拉取元数据并可选下载 PDF，便于离线处理。`citation-study` 现有两种全文模式：默认 `--mode supabase` 参考 journal-band-citation，按 DOI 调用 Supabase sci_search 均匀抽取全文段落（可直接用 `--doi` 自动拉取 OpenAlex 元数据，无需先跑 openalex-fetch）；或 `--mode pdf` 直接从本地 PDF 抽取文本（`--pdf` 单文件或 `--pdf-dir` 批量匹配）。`--use-mineru` 可选启用图表拆解，Supabase 模式下必须额外提供 PDF 供 Mineru 读取。模型基于 RCR 核心规则库，用 OpenAI `response_format`(`json_schema`) 输出 High/Middle/Low 引文带、四维度评分、行动计划及 RCR 契合度：
 
 ```bash
-uv run tiangong-workspace citation-study "foundation model alignment" \
-  --since-year 2020 \
-  --limit 30 \
-  --sort cited_by_count:desc \
-  --works-file ./openalex_results.json \
+uv run tiangong-workspace citation-study \
+  --mode supabase \
+  --doi 10.1234/abc \
+  --supabase-top-k 10 \
+  --supabase-est-k 80 \
   --pdf-dir ./papers \
+  --use-mineru \
   --json
+
+# 本地 PDF 抽取文本（单篇）
+uv run tiangong-workspace citation-study \
+  --mode pdf \
+  --doi 10.2345/xyz \
+  --pdf ./papers/sample.pdf
 ```
 
-- 自动识别类型：`article_type` 会返回 综述/研究/其他。
-- LLM 评分：`final_category`（high/medium/low）和 `llm_score` 由 OpenAI 评估，`heuristic_category` 提供可解释的基准评分。
-- 图表加权：指定 `--pdf` 后会通过 Mineru 汇总图表要点并注入提示词，自动抽取返回结果中以 “Image Description” 开头的段落，帮助 LLM 评估可读性与引用潜在影响。
-输出包含 `title`、`publication_year`、`cited_by_count`、`reference_count`、`abstract_words`、`article_type`、`final_category`、`llm_score` 及中英文 rationale，可直接串接 Agent 继续做摘要/行文逻辑/配图等特征分析。
+- 预测字段：`prediction.estimated_band`（High/Middle/Low）、`confidence_score`、`key_reason`。
+- 维度评分：`dimension_scores.topic/methodology/data/impact` 返回 1-3 分 + 优/中/差及规则编号的分析。
+- 行动建议：`action_plan` 直接给出提升引文潜力的修改清单，`rcr_match_index` 提示与 RCR 风格契合度。
+- 启发式：`heuristic_category/heuristic_score` 仍会输出，便于对比 LLM 评分与基础指标差异。
 
 ## PDF 图片解析（Mineru）
 `mineru-with-images` 子命令直接调用工作区内部的 Mineru API（`/mineru_with_images`），完成 PDF 文档中图片的识别与解析，支持最小调用和 MinIO 结果落盘：
