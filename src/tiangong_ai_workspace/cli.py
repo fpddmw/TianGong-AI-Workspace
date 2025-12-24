@@ -808,7 +808,10 @@ def journal_bands_analyze(
     for pros/cons per article without storing fulltext locally.
     """
 
-    typer.echo("Fetching citation bands from OpenAlex...")
+    def _log(msg: str) -> None:
+        typer.echo(f"[journal-bands] {msg}")
+
+    _log("Fetching citation bands from OpenAlex...")
     bands = fetch_journal_citation_bands(
         journal_issn=journal_issn,
         journal_name=journal_name,
@@ -816,6 +819,7 @@ def journal_bands_analyze(
         band_limit=band_limit,
         max_records=max_records,
     )
+    _log(f"Fetched bands: high={len(bands.high)}, middle={len(bands.middle)}, low={len(bands.low)} " f"(p25={bands.thresholds.get('p25', 0):.1f}, p75={bands.thresholds.get('p75', 0):.1f})")
 
     supabase = SupabaseClient()
     router = ModelRouter()
@@ -826,88 +830,149 @@ def journal_bands_analyze(
         ("Middle citation (mid band)", bands.middle),
         ("Low citation (bottom)", bands.low),
     ]
+    band_thresholds = {
+        "High citation (top)": f"≥ p75 ({bands.thresholds.get('p75', 0):.1f})",
+        "Middle citation (mid band)": f"介于 p25 ({bands.thresholds.get('p25', 0):.1f}) 与 p75 ({bands.thresholds.get('p75', 0):.1f}) 之间",
+        "Low citation (bottom)": f"≤ p25 ({bands.thresholds.get('p25', 0):.1f})",
+    }
 
-    lines: list[str] = []
-    lines.append(f"# Journal analysis: {journal_name} (ISSN {journal_issn})")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    header_lines: list[str] = []
+    header_lines.append(f"# Journal analysis: {journal_name} (ISSN {journal_issn})")
     if publish_year:
-        lines.append(f"- Publication year filter: {publish_year}")
-    lines.append(f"- Band limit: {band_limit} (after percentile split), max records considered: {max_records}")
-    lines.append(f"- Citation thresholds: p25={bands.thresholds.get('p25', 0):.1f}, p75={bands.thresholds.get('p75', 0):.1f}")
-    lines.append(f"- Supabase sci_search: topK={top_k}, estK={est_k}")
-    lines.append("")
+        header_lines.append(f"- Publication year filter: {publish_year}")
+    header_lines.append(f"- Band limit: {band_limit} (after percentile split), max records considered: {max_records}")
+    header_lines.append(f"- Citation thresholds: p25={bands.thresholds.get('p25', 0):.1f}, p75={bands.thresholds.get('p75', 0):.1f}")
+    header_lines.append(f"- Supabase sci_search: topK={top_k}, estK={est_k}")
+    header_lines.append("")
+    with output.open("w", encoding="utf-8") as handle:
+        handle.write("\n".join(header_lines) + "\n")
 
     for section_title, works in sections:
-        lines.append(f"## {section_title}")
+        section_lines: list[str] = [f"## {section_title}"]
         if not works:
-            lines.append("_No records found._")
-            lines.append("")
+            section_lines.append("_No records found._")
+            section_lines.append("")
+            with output.open("a", encoding="utf-8") as handle:
+                handle.write("\n".join(section_lines))
             continue
-        for work in works:
+        with output.open("a", encoding="utf-8") as handle:
+            handle.write("\n".join(section_lines) + "\n")
+        _log(f"Processing {len(works)} papers in {section_title}...")
+        for idx, work in enumerate(works, start=1):
             doi = work.get("doi")
             title = work.get("title") or "(untitled)"
             citation_count = work.get("cited_by_count")
             year = work.get("publication_year")
+            if idx % 20 == 1 or idx == len(works):
+                _log(f"{section_title}: {idx}/{len(works)}")
             try:
                 fulltext = supabase.fetch_content(str(doi or ""), query="总结这篇文章的主要内容", top_k=top_k, est_k=est_k)
             except SupabaseClientError as exc:
                 rationale = f"Supabase 获取全文失败: {exc}"
-                lines.append(f"- **{title}** ({year}, cites: {citation_count}) DOI: {doi or 'n/a'}")
-                lines.append(f"  - {rationale}")
+                entry_lines = [
+                    f"- **{title}** ({year}, cites: {citation_count}) DOI: {doi or 'n/a'}",
+                    f"  - {rationale}",
+                    "",
+                ]
+                with output.open("a", encoding="utf-8") as handle:
+                    handle.write("\n".join(entry_lines))
                 continue
 
             content_text = json.dumps(fulltext, ensure_ascii=False)[:8000]
+            system_prompt = (
+                "## Role\n"
+                "你是一位资深的学术计量学专家与期刊审稿人。你的任务是分析学术论文的特征，并探讨这些特征与其引文表现（引用带：High/Middle/Low）之间的潜在逻辑关系，为构建“投稿指导规则库”提供结构化素材。\n\n"
+                "## Task\n"
+                "请根据提供的元数据和全文片段，从以下五个维度对文章进行深度特征分析，并输出 JSON 格式的评价：\n"
+                "1. 【选题前沿性 (Topic Novelty)】：是否涉及热点、新兴领域或交叉学科。\n"
+                "2. 【方法论完备性 (Methodology)】：实验设计、模型创新度、逻辑严密程度。\n"
+                "3. 【数据/证据效力 (Data Evidence)】：样本规模、数据来源的权威性、实证分析的深度。\n"
+                "4. 【结论影响深度 (Impact)】：是否提供了决策支持、政策建议或理论突破。\n"
+                "5. 【表述与规范性 (Presentation)】：论证逻辑、专业术语使用的准确性。\n\n"
+                "## Constraints\n"
+                "1. 严禁捏造数据。\n"
+                "2. 评价需客观、简练，必须直接指出该维度下的“具体特征点”。\n"
+                "3. 语言统一使用中文。\n"
+                "4. 输出必须是合法的 JSON 对象。\n"
+                "5. 明确区分文章类型（学术研究/综述/其他），并给出理由。\n\n"
+                "## Output Format (JSON)\n"
+                "{\n"
+                '  "citation_band": "High/Middle/Low",\n'
+                '  "article_type": "研究/综述/其他",\n'
+                '  "features_analysis": {\n'
+                '    "topic": {"eval": "优/中/差", "reason": "特征描述"},\n'
+                '    "methodology": {"eval": "优/中/差", "reason": "特征描述"},\n'
+                '    "data": {"eval": "优/中/差", "reason": "特征描述"},\n'
+                '    "impact": {"eval": "优/中/差", "reason": "特征描述"},\n'
+                '    "presentation": {"eval": "优/中/差", "reason": "特征描述"}\n'
+                "  },\n"
+                '  "rule_suggestion": "基于该文章表现，提炼的一条通用投稿建议/规则"\n'
+                "}"
+            )
+
             messages = [
-                SystemMessage(
-                    content=(
-                        "You are summarizing factors that may explain citation performance. "
-                        "Given metadata and extracted fulltext (no images), list strengths and weaknesses. "
-                        "Do NOT invent citation counts or download stats. Keep concise bullet points."
-                    )
-                ),
+                SystemMessage(content=system_prompt),
                 HumanMessage(
-                    content=json.dumps(
-                        {
-                            "title": title,
-                            "doi": doi,
-                            "year": year,
-                            "cited_by_count_hint": citation_count,
-                            "band": section_title,
-                            "fulltext_excerpt": content_text,
-                        },
-                        ensure_ascii=False,
+                    content=(
+                        "【待分析内容】\n"
+                        f"- 目标期刊: {journal_name}\n"
+                        f"- 引用表现: {section_title} (该期刊中引用排名位于 {band_thresholds.get(section_title, '')})\n"
+                        f"- 标题: {title}\n"
+                        f"- 作者: {work.get('authorships') or '未知'}\n"
+                        f"- 摘要/片段: {content_text}\n"
+                        '请基于以上信息，分析为何该文章会处于 "{band_thresholds.get(section_title, "")}" 引用带，并按照要求的 JSON 格式输出。'
                     )
                 ),
             ]
+            summary: Mapping[str, Any] | None = None
+            raw_text: str | None = None
             try:
                 resp = chat_model.invoke(messages, response_format={"type": "json_object"})
                 content = getattr(resp, "content", None) or (resp.generations[0].message.content if hasattr(resp, "generations") else None)
-                summary = json.loads(content) if isinstance(content, str) else content
-            except Exception:
-                summary = None
+                if isinstance(content, str):
+                    raw_text = content
+                    try:
+                        summary = json.loads(content)
+                    except json.JSONDecodeError:
+                        summary = None
+                elif isinstance(content, Mapping):
+                    summary = dict(content)
+                    raw_text = json.dumps(summary, ensure_ascii=False)
+                else:
+                    raw_text = str(content)
+            except Exception as exc:  # pragma: no cover - defensive
+                raw_text = f"LLM 调用失败: {exc}"
 
-            lines.append(f"- **{title}** ({year}, cites: {citation_count}) DOI: {doi or 'n/a'}")
+            entry_lines = [f"- **{title}** ({year}, cites: {citation_count}) DOI: {doi or 'n/a'}"]
             if isinstance(summary, Mapping):
+                article_type = summary.get("article_type")
+                if article_type:
+                    entry_lines.append(f"  - 文章类型: {article_type}")
                 strengths = summary.get("strengths") or summary.get("pros") or summary.get("advantages")
                 weaknesses = summary.get("weaknesses") or summary.get("cons") or summary.get("risks")
                 if strengths:
                     if isinstance(strengths, str):
                         strengths = [strengths]
-                    lines.append("  - 优势:")
+                    entry_lines.append("  - 优势:")
                     for item in strengths:
-                        lines.append(f"    - {item}")
+                        entry_lines.append(f"    - {item}")
                 if weaknesses:
                     if isinstance(weaknesses, str):
                         weaknesses = [weaknesses]
-                    lines.append("  - 不足:")
+                    entry_lines.append("  - 不足:")
                     for item in weaknesses:
-                        lines.append(f"    - {item}")
+                        entry_lines.append(f"    - {item}")
             else:
-                lines.append("  - 无法解析 LLM 输出，原始响应略。")
-            lines.append("")
+                entry_lines.append("  - 无法解析 LLM 输出，原始响应略。")
+            if raw_text:
+                entry_lines.append("  - 原始 LLM 输出:")
+                entry_lines.append(f"    - {raw_text}")
+            entry_lines.append("")
+            with output.open("a", encoding="utf-8") as handle:
+                handle.write("\n".join(entry_lines))
 
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text("\n".join(lines), encoding="utf-8")
-    typer.echo(f"Summary written to {output}")
+    typer.echo(f"Summary streaming written to {output}")
 
 
 def _load_works_file(path: Path) -> list[Mapping[str, Any]]:
