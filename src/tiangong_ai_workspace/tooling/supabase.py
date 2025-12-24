@@ -12,6 +12,26 @@ from ..secrets import Secrets, SupabaseSecrets, load_secrets
 __all__ = ["SupabaseClient", "SupabaseClientError"]
 
 
+def _normalize_doi(value: str) -> str:
+    """Strip common DOI URL/prefix forms and trailing punctuation."""
+
+    raw = value.strip()
+    lowered = raw.lower()
+    prefixes = (
+        "https://doi.org/",
+        "http://doi.org/",
+        "https://dx.doi.org/",
+        "http://dx.doi.org/",
+        "doi.org/",
+        "doi:",
+    )
+    for prefix in prefixes:
+        if lowered.startswith(prefix):
+            raw = raw[len(prefix) :]
+            break
+    return raw.strip(" .;,")
+
+
 class SupabaseClientError(RuntimeError):
     """Raised when Supabase sci_search requests fail."""
 
@@ -36,9 +56,10 @@ class SupabaseClient:
     def fetch_content(self, doi: str, query: str, *, top_k: int = 5, est_k: int = 50) -> Mapping[str, Any]:
         if not doi.strip():
             raise SupabaseClientError("DOI cannot be empty.")
+        normalized_doi = _normalize_doi(doi)
         payload = {
             "query": query,
-            "filter": {"doi": [doi]},
+            "filter": {"doi": [normalized_doi]},
             "topK": top_k,
             "estK": est_k,
         }

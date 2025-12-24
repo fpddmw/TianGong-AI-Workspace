@@ -789,8 +789,9 @@ def journal_bands_analyze(
     publish_year: Optional[int] = typer.Option(None, "--year", help="Optional publication year filter."),
     band_limit: int = typer.Option(200, "--band-limit", min=10, max=400, help="Max papers to include per band after percentile split."),
     max_records: int = typer.Option(800, "--max-records", min=50, max=2000, help="Maximum records to fetch from OpenAlex."),
-    top_k: int = typer.Option(5, "--top-k", help="Supabase sci_search topK for fulltext retrieval."),
-    est_k: int = typer.Option(50, "--est-k", help="Supabase sci_search estK for fulltext retrieval."),
+    top_k: int = typer.Option(10, "--top-k", help="Supabase sci_search topK for fulltext retrieval."),
+    est_k: int = typer.Option(80, "--est-k", help="Supabase sci_search estK for fulltext retrieval."),
+    show_fulltext: bool = typer.Option(False, "--show-fulltext", help="Include retrieved fulltext snippets in the output for debugging."),
     output: Path = typer.Option(
         Path("journal_bands_summary.md"),
         "--output",
@@ -824,17 +825,46 @@ def journal_bands_analyze(
     supabase = SupabaseClient()
     router = ModelRouter()
     chat_model = router.create_chat_model(purpose="general", temperature=0.2)
-
+    feature_eval_schema: Mapping[str, Any] = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "eval": {"type": "string", "enum": ["优", "中", "差"]},
+            "reason": {"type": "string"},
+        },
+        "required": ["eval", "reason"],
+    }
+    response_schema: Mapping[str, Any] = {
+        "name": "journal_band_assessment",
+        "schema": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "citation_band": {"type": "string", "enum": ["High", "Middle", "Low"]},
+                "article_type": {"type": "string", "enum": ["研究", "综述", "其他"]},
+                "features_analysis": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "topic": feature_eval_schema,
+                        "methodology": feature_eval_schema,
+                        "data": feature_eval_schema,
+                        "impact": feature_eval_schema,
+                        "presentation": feature_eval_schema,
+                    },
+                    "required": ["topic", "methodology", "data", "impact", "presentation"],
+                },
+                "rule_suggestion": {"type": "string"},
+            },
+            "required": ["citation_band", "article_type", "features_analysis", "rule_suggestion"],
+        },
+        "strict": True,
+    }
     sections: list[tuple[str, list[Mapping[str, Any]]]] = [
         ("High citation (top)", bands.high),
         ("Middle citation (mid band)", bands.middle),
         ("Low citation (bottom)", bands.low),
     ]
-    band_thresholds = {
-        "High citation (top)": f"≥ p75 ({bands.thresholds.get('p75', 0):.1f})",
-        "Middle citation (mid band)": f"介于 p25 ({bands.thresholds.get('p25', 0):.1f}) 与 p75 ({bands.thresholds.get('p75', 0):.1f}) 之间",
-        "Low citation (bottom)": f"≤ p25 ({bands.thresholds.get('p25', 0):.1f})",
-    }
 
     output.parent.mkdir(parents=True, exist_ok=True)
     header_lines: list[str] = []
@@ -867,7 +897,7 @@ def journal_bands_analyze(
             if idx % 20 == 1 or idx == len(works):
                 _log(f"{section_title}: {idx}/{len(works)}")
             try:
-                fulltext = supabase.fetch_content(str(doi or ""), query="总结这篇文章的主要内容", top_k=top_k, est_k=est_k)
+                fulltext = supabase.fetch_content(str(doi or ""), query="请尽可能均匀的在全文中选择十个段落", top_k=top_k, est_k=est_k)
             except SupabaseClientError as exc:
                 rationale = f"Supabase 获取全文失败: {exc}"
                 entry_lines = [
@@ -879,56 +909,33 @@ def journal_bands_analyze(
                     handle.write("\n".join(entry_lines))
                 continue
 
-            content_text = json.dumps(fulltext, ensure_ascii=False)[:8000]
+            content_text = json.dumps(fulltext, ensure_ascii=False)
             system_prompt = (
-                "## Role\n"
-                "你是一位资深的学术计量学专家与期刊审稿人。你的任务是分析学术论文的特征，并探讨这些特征与其引文表现（引用带：High/Middle/Low）之间的潜在逻辑关系，为构建“投稿指导规则库”提供结构化素材。\n\n"
-                "## Task\n"
-                "请根据提供的元数据和全文片段，从以下五个维度对文章进行深度特征分析，并输出 JSON 格式的评价：\n"
-                "1. 【选题前沿性 (Topic Novelty)】：是否涉及热点、新兴领域或交叉学科。\n"
-                "2. 【方法论完备性 (Methodology)】：实验设计、模型创新度、逻辑严密程度。\n"
-                "3. 【数据/证据效力 (Data Evidence)】：样本规模、数据来源的权威性、实证分析的深度。\n"
-                "4. 【结论影响深度 (Impact)】：是否提供了决策支持、政策建议或理论突破。\n"
-                "5. 【表述与规范性 (Presentation)】：论证逻辑、专业术语使用的准确性。\n\n"
-                "## Constraints\n"
-                "1. 严禁捏造数据。\n"
-                "2. 评价需客观、简练，必须直接指出该维度下的“具体特征点”。\n"
-                "3. 语言统一使用中文。\n"
-                "4. 输出必须是合法的 JSON 对象。\n"
-                "5. 明确区分文章类型（学术研究/综述/其他），并给出理由。\n\n"
-                "## Output Format (JSON)\n"
-                "{\n"
-                '  "citation_band": "High/Middle/Low",\n'
-                '  "article_type": "研究/综述/其他",\n'
-                '  "features_analysis": {\n'
-                '    "topic": {"eval": "优/中/差", "reason": "特征描述"},\n'
-                '    "methodology": {"eval": "优/中/差", "reason": "特征描述"},\n'
-                '    "data": {"eval": "优/中/差", "reason": "特征描述"},\n'
-                '    "impact": {"eval": "优/中/差", "reason": "特征描述"},\n'
-                '    "presentation": {"eval": "优/中/差", "reason": "特征描述"}\n'
-                "  },\n"
-                '  "rule_suggestion": "基于该文章表现，提炼的一条通用投稿建议/规则"\n'
-                "}"
+                "Role\n"
+                "你是一位资深的学术计量学专家与期刊审稿人。你的任务是分析学术论文的特征，并探讨这些特征的表现。"
+                "Task"
+                "请根据待分析内容，从以下五个维度对文章进行深度特征分析，并输出 JSON 格式的评价："
+                "选题前沿性：是否涉及热点、新兴领域或交叉学科。"
+                "方法论完备性：实验设计、模型创新度、逻辑严密程度。"
+                "数据/证据效力：样本规模、数据来源的权威性、实证分析的深度。"
+                "结论影响深度：是否提供了决策支持、政策建议或理论突破。"
+                "表述与规范性：论证逻辑、专业术语使用的准确性。"
+                "Constraints"
+                "严禁捏造数据。"
+                "评价需客观、简练，必须直接指出该维度下的“具体特征点”。"
+                "语言统一使用中文。"
+                "输出必须是合法的 JSON 对象，字段需严格匹配预定义 schema。"
+                "明确区分文章类型（学术研究/综述/其他），并给出理由。"
             )
 
             messages = [
                 SystemMessage(content=system_prompt),
-                HumanMessage(
-                    content=(
-                        "【待分析内容】\n"
-                        f"- 目标期刊: {journal_name}\n"
-                        f"- 引用表现: {section_title} (该期刊中引用排名位于 {band_thresholds.get(section_title, '')})\n"
-                        f"- 标题: {title}\n"
-                        f"- 作者: {work.get('authorships') or '未知'}\n"
-                        f"- 摘要/片段: {content_text}\n"
-                        '请基于以上信息，分析为何该文章会处于 "{band_thresholds.get(section_title, "")}" 引用带，并按照要求的 JSON 格式输出。'
-                    )
-                ),
+                HumanMessage(content=("待分析内容\n" f"- 标题: {title}\n" f"- 作者: {work.get('authorships') or '未知'}\n" f"- 摘要/片段: {content_text}\n" "请按照要求的 JSON 格式输出。")),
             ]
             summary: Mapping[str, Any] | None = None
             raw_text: str | None = None
             try:
-                resp = chat_model.invoke(messages, response_format={"type": "json_object"})
+                resp = chat_model.invoke(messages, response_format={"type": "json_schema", "json_schema": response_schema})
                 content = getattr(resp, "content", None) or (resp.generations[0].message.content if hasattr(resp, "generations") else None)
                 if isinstance(content, str):
                     raw_text = content
@@ -945,6 +952,10 @@ def journal_bands_analyze(
                 raw_text = f"LLM 调用失败: {exc}"
 
             entry_lines = [f"- **{title}** ({year}, cites: {citation_count}) DOI: {doi or 'n/a'}"]
+            if show_fulltext:
+                entry_lines.append(f"  - Fulltext excerpt (len={len(content_text)}): {content_text}")
+                if len(content_text.strip()) < 10:
+                    entry_lines.append(f"  - Supabase raw payload: {json.dumps(fulltext, ensure_ascii=False)[:400]}")
             if isinstance(summary, Mapping):
                 article_type = summary.get("article_type")
                 if article_type:

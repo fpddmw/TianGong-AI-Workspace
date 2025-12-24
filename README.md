@@ -68,6 +68,7 @@ uv run tiangong-workspace mineru-with-images ./doc.pdf --prompt "提取图表含
 ```
 
 所有支持的命令都提供 `--json` 选项，可输出结构化响应，方便被其他智能体消费。
+`journal-bands-analyze` 的期刊分带特征分析命令已使用 OpenAI `response_format`（`json_schema`）强约束输出字段，确保五个维度的评估结构化可机读。
 
 ### 工作区配置
 - `pyproject.toml` 中的 `[tool.tiangong.workspace.cli_tools]` / `[tool.tiangong.workspace.tool_registry]` 控制 CLI 检测与 Agent Catalog，无需修改源码即可扩充。
