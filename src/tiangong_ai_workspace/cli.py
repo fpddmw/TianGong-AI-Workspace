@@ -792,8 +792,7 @@ def citation_study(
             try:
                 mineru = MineruClient(api_url_override=mineru_url, token_override=mineru_token, timeout=float(mineru_timeout))
                 mineru_prompt = (
-                    "请逐条概括文档中的每个图表/配图，重点说明图表类型、呈现的数据或流程，以及它们如何帮助读者理解核心贡献。"
-                    "不要臆造不存在的图表。输出简洁的要点列表。请使用英文回答。"
+                    "请逐条概括文档中的每个图表/配图，重点说明图表类型、呈现的数据或流程，以及它们如何帮助读者理解核心贡献。" "不要臆造不存在的图表。输出简洁的要点列表。请使用英文回答。"
                 )
                 mineru_result = mineru.recognize_with_images(pdf_path, prompt=mineru_prompt)
                 figure_payload = mineru_result.get("result")
@@ -821,7 +820,6 @@ def citation_study(
                 _emit_response(response, json_output)
                 figure_notes = None
 
-        heuristic = client.classify_work(work)
         fulltext_used: Optional[str] = None
         fulltext_source = None
         fulltext_error: Optional[str] = None
@@ -849,33 +847,20 @@ def citation_study(
                 except OpenAlexClientError as exc:
                     fulltext_error = str(exc)
 
+        llm_error: Optional[str] = None
         try:
             llm_result = assessor.assess(
                 work,
-                heuristic=heuristic,
                 fulltext=fulltext_used,
                 fulltext_source=fulltext_source or mode_normalized,
                 figure_notes=_trim_text(figure_notes, max_fulltext_chars // 2) if figure_notes else None,
             )
-        except Exception as exc:  # pragma: no cover - defensive: fall back to heuristic
-            band_value = (heuristic.get("category") if heuristic else "middle") if isinstance(heuristic, Mapping) else "middle"
-            band_mapping = {"high": "High", "middle": "Middle", "low": "Low"}
-            mapped_band = band_mapping.get(str(band_value).lower(), "Middle")
-            fallback_reason = f"LLM 评分失败，回退启发式: {exc}"
+        except Exception as exc:  # pragma: no cover - defensive: surface LLM failure without heuristic fallback
+            llm_error = f"LLM 评分失败: {exc}"
             llm_result = {
-                "prediction": {
-                    "estimated_band": mapped_band,
-                    "confidence_score": "40%",
-                    "key_reason": fallback_reason,
-                },
-                "dimension_scores": {
-                    "topic": {"score": 2, "eval": "中", "analysis": fallback_reason},
-                    "methodology": {"score": 2, "eval": "中", "analysis": fallback_reason},
-                    "data": {"score": 2, "eval": "中", "analysis": fallback_reason},
-                    "impact": {"score": 2, "eval": "中", "analysis": fallback_reason},
-                },
-                "action_plan": ["提供 PDF 全文或检查 Supabase 配置后重试，以获得准确的 RCR 引文带评估。"],
-                "rcr_match_index": "0%",
+                "prediction": None,
+                "dimension_scores": None,
+                "action_plan": None,
                 "raw": None,
             }
 
@@ -886,14 +871,9 @@ def citation_study(
             "publication_year": work.get("publication_year"),
             "cited_by_count": work.get("cited_by_count"),
             "reference_count": work.get("referenced_works_count"),
-            "open_access": heuristic.get("open_access"),
-            "abstract_words": heuristic.get("abstract_words"),
-            "heuristic_category": heuristic["category"],
-            "heuristic_score": heuristic["score"],
             "prediction": llm_result.get("prediction"),
             "dimension_scores": llm_result.get("dimension_scores"),
             "action_plan": llm_result.get("action_plan"),
-            "rcr_match_index": llm_result.get("rcr_match_index"),
             "fulltext_mode": mode_normalized,
             "fulltext_source": fulltext_source or mode_normalized,
             "fulltext_excerpt_used": _trim_text(fulltext_used, 800) if fulltext_used else None,
@@ -901,6 +881,7 @@ def citation_study(
             "figure_notes_used": _trim_text(figure_notes, 800) if figure_notes else None,
             "pdf_path_used": str(pdf_path) if pdf_path else None,
             "mineru_result": raw_mineru_result if include_mineru_result else None,
+            "llm_error": llm_error,
             # "raw_llm": llm_result.get("raw"),
         }
         classified.append(combined)
@@ -921,14 +902,10 @@ def citation_study(
         for item in classified:
             title = item.get("title") or "(untitled)"
             band = (item.get("prediction") or {}).get("estimated_band") or "n/a"
-            match_idx = item.get("rcr_match_index") or "n/a"
             source_mode = item.get("fulltext_mode") or "n/a"
-            typer.echo(
-                f"[{band}] {title} ({item.get('publication_year') or 'n/a'}) — cites: {item.get('cited_by_count')}, "
-                f"mode: {source_mode}, RCR match: {match_idx}"
-            )
+        typer.echo(f"[{band}] {title} ({item.get('publication_year') or 'n/a'}) — cites: {item.get('cited_by_count')}, " f"mode: {source_mode}, RCR match: {match_idx}")
         typer.echo("")
-        typer.echo("Use --json for structured results including dimension scores, action plans, and baseline heuristics.")
+        typer.echo("Use --json for structured results including dimension scores, action plans, and RCR match index.")
 
 
 # --------------------------------------------------------------------------- Helpers
@@ -1087,13 +1064,14 @@ def journal_bands_analyze(
 
             messages = [
                 SystemMessage(content=system_prompt),
-                HumanMessage(content=(
-                    "待分析内容\n"
-                    f"- 引用表现: 该期刊中引用排名位于{section_title}，引用量为{citation_count}\n"
-                    f"- 标题: {title}\n" 
-                    f"- 作者: {work.get('authorships') or '未知'}\n" 
-                    f"- 摘要/片段: {content_text}\n" 
-                    f'请基于以上信息，分析为何该文章会拥有这样的引用表现，并按照要求的 JSON 格式输出。'
+                HumanMessage(
+                    content=(
+                        "待分析内容\n"
+                        f"- 引用表现: 该期刊中引用排名位于{section_title}，引用量为{citation_count}\n"
+                        f"- 标题: {title}\n"
+                        f"- 作者: {work.get('authorships') or '未知'}\n"
+                        f"- 摘要/片段: {content_text}\n"
+                        f"请基于以上信息，分析为何该文章会拥有这样的引用表现，并按照要求的 JSON 格式输出。"
                     )
                 ),
             ]

@@ -63,7 +63,7 @@ All three must pass before sharing updates.
 - `uv run tiangong-workspace embeddings generate "<text>"` — 调用 OpenAI 兼容 embedding 服务，支持批量文本、`--model/--json`。
 - `uv run tiangong-workspace openalex-fetch "topic" --limit 20 --download-dir ./papers` — 预取 OpenAlex 元数据并尝试下载 PDF。
 - `uv run tiangong-workspace journal-bands-analyze --issn <issn> --journal "<name>"` — Supabase 取样全文后用 OpenAI `response_format`(`json_schema`) 严格输出五维度特征分析，默认每档位随机抽样 10% 并发处理（≤10 线程），会自动过滤无 DOI 及标题包含 “Corrigendum to …”/“Editorial Board” 的记录。
-- `uv run tiangong-workspace citation-study --mode supabase --doi 10.1234/abc --pdf-dir ./papers --use-mineru` — 两种模式：`supabase` 可直接用 `--doi` 拉取 OpenAlex 元数据后走 Supabase sci_search 获取全文（若开启 `--use-mineru` 必须提供 PDF 以拆解图表；也可继续使用 --works-file 批量处理）；`pdf` 直接读取本地 PDF 抽取全文。LLM 采用 RCR 核心规则库 + OpenAI `response_format` JSON schema 输出 High/Middle/Low 引文带、四维评分与行动建议。
+- `uv run tiangong-workspace citation-study --mode supabase --doi 10.1234/abc --pdf-dir ./papers --use-mineru` — 两种模式：`supabase` 可直接用 `--doi` 拉取 OpenAlex 元数据后走 Supabase sci_search 获取全文（若开启 `--use-mineru` 必须提供 PDF 以拆解图表；也可继续使用 --works-file 批量处理）；`pdf` 直接读取本地 PDF 抽取全文。LLM 采用 RCR 核心规则库 + OpenAI `response_format` JSON schema 输出 High/Middle/Low 引文带、四维评分与行动建议，已取消启发式评分。
 - `uv run tiangong-workspace mineru-with-images ./file.pdf --prompt "解析图表"` — 调用 Mineru PDF 图片解析 API，支持 MinIO 落盘与模型透传。
 - `uv run tiangong-workspace mcp services|tools|invoke` — inspect and call configured MCP services.
 

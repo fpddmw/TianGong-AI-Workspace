@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping, MutableMapping, Optional, Sequence
 
@@ -163,82 +162,6 @@ class OpenAlexClient:
                 return match.group(0)
         raise OpenAlexClientError("DOI not found in PDF.")
 
-    def classify_work(self, work: Mapping[str, Any]) -> Mapping[str, Any]:
-        """Assign a coarse citation potential category with rationale."""
-
-        cited_by = int(work.get("cited_by_count") or 0)
-        year = int(work.get("publication_year") or 0)
-        reference_count = int(work.get("referenced_works_count") or 0)
-        abstract_text = _flatten_abstract(work.get("abstract_inverted_index"))
-        abstract_words = len(abstract_text.split()) if abstract_text else 0
-        is_oa = bool(work.get("open_access", {}).get("is_oa")) if isinstance(work.get("open_access"), Mapping) else False
-
-        score = 0.0
-        rationale: list[str] = []
-
-        # Citations carry the most weight.
-        if cited_by >= 200:
-            score += 3
-            rationale.append("高引用次数(≥200)")
-        elif cited_by >= 80:
-            score += 2.5
-            rationale.append("较高引用次数(≥80)")
-        elif cited_by >= 20:
-            score += 1
-            rationale.append("中等引用次数(≥20)")
-        else:
-            rationale.append("引用次数较低(<20)")
-
-        # Recency: newer work has less time to accumulate citations.
-        current_year = datetime.now(timezone.utc).year
-        if year >= current_year - 2:
-            score += 0.3
-            rationale.append("近发表年份，未来潜力待观察")
-        elif year <= current_year - 7:
-            score += 0.2
-            rationale.append("发表时间较久，引用积累充分")
-
-        # Abstract depth as a proxy for clarity/structure.
-        if abstract_words >= 200:
-            score += 0.5
-            rationale.append("摘要较长，信息密度高")
-        elif abstract_words < 50:
-            score -= 0.2
-            rationale.append("摘要较短，信息有限")
-
-        # Reference breadth.
-        if reference_count >= 30:
-            score += 0.3
-            rationale.append("引用文献丰富(≥30)")
-        elif reference_count == 0:
-            score -= 0.2
-            rationale.append("缺少参考文献计数")
-
-        # Accessibility proxy.
-        if is_oa:
-            score += 0.2
-            rationale.append("开放获取可见度更高")
-
-        if score >= 3.0:
-            category = "high"
-        elif score >= 1.8:
-            category = "medium"
-        else:
-            category = "low"
-
-        return {
-            "id": work.get("id"),
-            "title": work.get("title"),
-            "publication_year": year or None,
-            "cited_by_count": cited_by,
-            "reference_count": reference_count,
-            "open_access": is_oa,
-            "abstract_words": abstract_words,
-            "category": category,
-            "score": round(score, 2),
-            "rationale": rationale,
-        }
-
     def _get(self, url: str, params: Mapping[str, Any]) -> httpx.Response:
         if self.http_client is not None:
             return self.http_client.get(url, params=params, timeout=self.timeout)
@@ -256,7 +179,6 @@ class LLMCitationAssessor:
         self,
         work: Mapping[str, Any],
         *,
-        heuristic: Mapping[str, Any] | None = None,
         fulltext: Optional[str] = None,
         fulltext_source: Optional[str] = None,
         figure_notes: Optional[str] = None,
@@ -268,38 +190,45 @@ class LLMCitationAssessor:
             temperature=self.temperature,
         )
         system_prompt_parts = [
-            "Role 你是一位深耕于《Resources, Conservation & Recycling》(RCR) 期刊的资深审稿专家与学术计量学分析师,能够通过分析文章的摘要、方法论和数据特征，准确预判其两年后的引用水平并提供针对性的修改建议。",
-            "Goal 根据用户提供的论文初稿信息（标题、摘要、方法、数据描述），基于“RCR 核心规则库”进行多维度打分，预测引文表现，并给出旨在提升“引文潜力”的改进方案。",
-            "RCR Core Rulebook (核心规则库)",
-            "1. 选题战略维度 (Topic Strategic Fit)",
-            " - 【规则 1.1：跨学科耦合】高引论文必须关联两个以上的前沿领域。核心关键词：AI/机器学习、ESG 风险、全球能源转型、供应链安全、碳中和路径、关键金属安全。",
-            " - 【规则 1.2：尺度溢价】全球(Global) > 国家(National) > 跨区域 > 单一城市 > 单一工厂。",
-            " - 【规则 1.3：通用性陷阱】若研究对象为特定地区，必须在方法论上提出“可迁移框架”或“普适性机理”，否则视为 Low Band 倾向。",
-            "2. 方法论严谨性维度 (Methodological Rigor)",
-            " - 【规则 2.1：闭环评价原则】材料/工程类文章必须包含“结构设计-性能评估-LCA(环境)-LCC(经济)”的完整闭环。",
-            " - 【规则 2.2：算法壁垒】涉及 AI/ML 时，必须包含：5种以上算法对比、嵌套交叉验证、模型可解释性分析（如 SHAP 值）。",
-            " - 【规则 2.3：定量化门槛】定性研究（访谈/政策评论）若无系统编码或情景模拟（如系统动力学/SD），被引潜力通常极低。",
-            "3. 数据与证据维度 (Data & Evidence Utility)",
-            " - 【规则 3.1：数据权威性】优先使用 UN Comtrade, USGS, IEA, S&P Global 等权威二阶数据，或大规模卫星遥感数据。",
-            " - 【规则 3.2：时效性红线】政策分析类数据滞后不得超过 3 年。",
-            " - 【规则 3.3：可视化标准】鼓励使用高质量 Sankey 图（物质流）、GIS 热力图和复杂的关联网络图。",
-            "4. 影响力与决策支撑 (Impact & Decision Support)",
-            " - 【规则 4.1：政策锚点】结论必须直接呼应具体国际条约或政策框架（如欧盟绿色协议、巴塞尔公约等）。",
-            " - 【规则 4.2：行动导向】拒绝“加强教育”等空洞建议，必须提供量化的、可操作的政策参数或改进点。",
-            "Evaluation Logic (评估逻辑)",
-            " - High Band：在 1.1, 1.2, 2.1, 4.1 规则中至少有三项表现卓越（优）。",
-            " - Middle Band：表现规范，但缺乏全球尺度或方法论创新较弱。",
-            " - Low Band：选题过窄、方法陈旧、或数据时效性差。",
-            "Constraints",
-            "评价需尖锐且客观，不要使用模棱两可的学术辞令。",
-            "必须直接指出违反了哪条 RCR Core Rulebook 中的具体规则。",
-            "语言统一使用中文。",
+            (
+                "Role\n"
+                "你是一位在环境科学、资源循环与可持续发展领域极具影响力的学术战略顾问。你擅长通过深度剖析论文的内在逻辑、方法严谨性与数据规模，"
+                "精准预判一篇稿件在期刊中的学术表现，并能给出极具建设性的修改意见。"
+            ),
+            ("Goal\n" "根据用户提供的论文初稿信息（标题、摘要、方法、数据描述），基于“RCR 核心规则库”进行多维度打分，预测引文表现，" "并给出旨在提升“引文潜力”的改进方案。"),
+            "Evaluation Criteria",
+            (
+                "请基于以下四个深度维度对用户提供的稿件信息进行评估：\n"
+                "1. 选题的系统性与全球视野\n"
+                "1.1跨领域耦合性：顶尖研究不再孤立地讨论“资源回收”，而是将其嵌入宏观系统中。核心在于是否能将AI/机器学习、循环经济与能源转型、地缘政治、供应链安全、碳中和路径或ESG 风险等全球大议题进行深度耦合。\n"
+                "1.2尺度溢价：评估研究是否具备“尺度跨越”能力。相比于单一工厂或特定城市的个案研究，具备全球视角（Global）、国家尺度（National）或跨区域流动分析的研究具有更高的学术价值。\n"
+                "1.3普适性范式：如果研究涉及特定地区，需审查其是否提炼出了可迁移的方法论框架。若仅停留于“本地现状描述”而无理论外延，其学术影响力将严重受限。\n"
+                "2. 方法论的集成深度与逻辑闭环\n"
+                "2.1全生命周期闭环：在资源利用研究中，优秀的论文应构建“机理探索—性能验证—环境影响（LCA）—经济可行性（LCC）”的闭环。缺乏环境效益或经济可行性对冲的技术研究往往显得单薄。\n"
+                "2.2计算与算法壁垒：若涉及数据建模或机器学习，需达到极高的工业严谨度。包括但不限于：多算法的横向对比验证、模型的可解释性分析（如 SHAP 值）、以及针对类不平衡或噪声数据的特殊鲁棒性处理。\n"
+                "2.3量化模拟深度：对于政策类文章，应超越纯定性的文本梳理。通过系统动力学（SD）、情景模拟或多代理模型（ABM）进行的量化预测，是区分普通综述与顶级研究的关键。\n"
+                "3. 数据效力与可视化表达\n"
+                "3.1数据权威性与规模：优先评估是否使用了权威的一阶/二阶数据源（如 S&P Global, IEA, UN Comtrade 等）。数据量级应能支撑起时间维度的趋势预测或空间维度的分布推演。\n"
+                "3.2时效性红线：环境政策与技术发展日新月异，数据来源若滞后于当前时间点 3 年以上，通常会被认为缺乏现实指导意义。\n"
+                "3.3专业可视化标准：高水平论文通常配有极具信息密度的可视化图表，如：展示物质流流向的桑基图、揭示地理分布的热力图以及展示变量间因果关联的结构方程模型图。\n"
+                "4. 决策支持与行动导向\n"
+                "4.1政策锚定精准度：结论是否直接回应了具体的国际协议、政府规划或行业标准。拒绝空洞的建议，优秀的论文应给出具体的参数（如：建议某项税收上调多少百分比能实现最佳回收率）。\n"
+                "4.2管理启示的深度：评估文章是否为决策者（政府或企业管理层）提供了具有“干预价值”的洞察，而非单纯的学术发现总结。"
+            ),
+            (
+                "Task\n"
+                "请针对用户提供的论文信息，对比上述标准完成："
+                "详细说明该文章在上述四个维度的表现。指出该文章目前最急需解决的一个致命弱点。给出具体的改进建议，帮助作者将文章提升至期刊录用标准。"
+                "定性描述该文章目前处于该领域中的位置（领先/中等/滞后），并预判其可能的被引潜力。"
+            ),
+            "Evaluation Logic",
+            "领先水平：在1.1, 1.2, 2.1, 4.1 准则中至少有三项表现卓越（优）。",
+            "中等水平：表现规范，但缺乏全球尺度或方法论创新较弱。",
+            "落后水平：选题过窄、方法陈旧、或数据时效性差。",
+            ("Constraints\n" "语言风格应尖锐且严肃、客观、专业，避免使用模板化的评价词汇，必须结合用户提供的具体研究内容进行深度点评。" "语言统一使用中文。"),
         ]
         if figure_notes:
-            system_prompt_parts.append(
-                "附加要求：已提供图表拆解，请结合图表所揭示的流程/数据/实验设计判断其是否支撑论文结论，"
-                "并在方法、数据或影响力维度中体现图表的解释力或缺陷。"
-            )
+            system_prompt_parts.append("附加要求：已提供图表拆解，请结合图表所揭示的流程/数据/实验设计判断其是否支撑论文结论，并在方法、数据或影响力维度中体现图表的解释力或缺陷。")
         system_prompt = "\n".join(system_prompt_parts)
 
         response_schema: Mapping[str, Any] = {
@@ -313,10 +242,9 @@ class LLMCitationAssessor:
                         "additionalProperties": False,
                         "properties": {
                             "estimated_band": {"type": "string", "enum": ["High", "Middle", "Low"]},
-                            "confidence_score": {"type": "string", "pattern": r"^\d{1,3}%$"},
                             "key_reason": {"type": "string"},
                         },
-                        "required": ["estimated_band", "confidence_score", "key_reason"],
+                        "required": ["estimated_band", "key_reason"],
                     },
                     "dimension_scores": {
                         "type": "object",
@@ -370,9 +298,8 @@ class LLMCitationAssessor:
                         "items": {"type": "string"},
                         "minItems": 1,
                     },
-                    "rcr_match_index": {"type": "string", "pattern": r"^\d{1,3}%$"},
                 },
-                "required": ["prediction", "dimension_scores", "action_plan", "rcr_match_index"],
+                "required": ["prediction", "dimension_scores", "action_plan"],
             },
             "strict": True,
         }
@@ -394,8 +321,6 @@ class LLMCitationAssessor:
             user_payload["fulltext_excerpt"] = fulltext
         if figure_notes:
             user_payload["figure_notes"] = figure_notes
-        if heuristic:
-            user_payload["baseline"] = heuristic
 
         messages = [
             SystemMessage(content=system_prompt),
@@ -441,6 +366,5 @@ class LLMCitationAssessor:
             "prediction": parsed.get("prediction"),
             "dimension_scores": parsed.get("dimension_scores"),
             "action_plan": parsed.get("action_plan"),
-            "rcr_match_index": parsed.get("rcr_match_index"),
             "raw": parsed,
         }

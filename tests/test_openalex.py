@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
@@ -31,23 +33,6 @@ def test_search_works_parses_results(monkeypatch: pytest.MonkeyPatch) -> None:
     results = client.search_works("ai", since_year=2020, per_page=5)
     assert results[0]["id"] == "W1"
 
-
-def test_classify_work_returns_category() -> None:
-    client = OpenAlexClient()
-    work = {
-        "id": "W2",
-        "title": "Sample paper",
-        "publication_year": 2018,
-        "cited_by_count": 120,
-        "referenced_works_count": 40,
-        "abstract_inverted_index": {"hello": [0], "world": [1]},
-        "open_access": {"is_oa": True},
-    }
-    result = client.classify_work(work)
-    assert result["category"] == "high"
-    assert result["score"] > 0
-
-
 def test_llm_assessor_parses_json(monkeypatch: pytest.MonkeyPatch) -> None:
     work = {
         "title": "LLM paper",
@@ -56,7 +41,20 @@ def test_llm_assessor_parses_json(monkeypatch: pytest.MonkeyPatch) -> None:
 
     class _StubModel:
         def invoke(self, messages, response_format=None):
-            generation = ChatGeneration(message=AIMessage(content='{"article_type":"综述","citation_category":"high","score":88,"rationale":["覆盖面广"]}'))
+            payload = {
+                "prediction": {
+                    "estimated_band": "High",
+                    "key_reason": "覆盖面广，方法严谨。",
+                },
+                "dimension_scores": {
+                    "topic": {"score": 3, "eval": "优", "analysis": "跨学科视角"},
+                    "methodology": {"score": 3, "eval": "优", "analysis": "方法闭环完整"},
+                    "data": {"score": 2, "eval": "中", "analysis": "数据量一般"},
+                    "impact": {"score": 3, "eval": "优", "analysis": "决策指向明确"},
+                },
+                "action_plan": ["补充更大规模的数据集"],
+            }
+            generation = ChatGeneration(message=AIMessage(content=json.dumps(payload, ensure_ascii=False)))
             return ChatResult(generations=[generation])
 
     class _StubRouter:
@@ -64,7 +62,7 @@ def test_llm_assessor_parses_json(monkeypatch: pytest.MonkeyPatch) -> None:
             return _StubModel()
 
     assessor = LLMCitationAssessor(router=_StubRouter())  # type: ignore[arg-type]
-    result = assessor.assess(work, heuristic={"category": "medium", "score": 2.0, "rationale": []})
-    assert result["article_type"] == "综述"
-    assert result["citation_category"] == "high"
-    assert result["score"] == 88
+    result = assessor.assess(work)
+    assert result["prediction"]["estimated_band"] == "High"
+    assert result["dimension_scores"]["topic"]["score"] == 3
+    assert result["action_plan"][0].startswith("补充")

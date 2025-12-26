@@ -179,8 +179,7 @@ uv run tiangong-workspace citation-study \
 
 - 预测字段：`prediction.estimated_band`（High/Middle/Low）、`confidence_score`、`key_reason`。
 - 维度评分：`dimension_scores.topic/methodology/data/impact` 返回 1-3 分 + 优/中/差及规则编号的分析。
-- 行动建议：`action_plan` 直接给出提升引文潜力的修改清单，`rcr_match_index` 提示与 RCR 风格契合度。
-- 启发式：`heuristic_category/heuristic_score` 仍会输出，便于对比 LLM 评分与基础指标差异。
+- 行动建议：`action_plan` 直接给出提升引文潜力的修改清单
 
 ## PDF 图片解析（Mineru）
 `mineru-with-images` 子命令直接调用工作区内部的 Mineru API（`/mineru_with_images`），完成 PDF 文档中图片的识别与解析，支持最小调用和 MinIO 结果落盘：
