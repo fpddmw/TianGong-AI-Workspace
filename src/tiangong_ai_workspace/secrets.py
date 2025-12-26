@@ -108,6 +108,14 @@ class MineruSecrets:
 
 
 @dataclass(slots=True)
+class SupabaseSecrets:
+    """Configuration for Supabase edge function used for sci_search."""
+
+    api_url: str
+    token: str
+
+
+@dataclass(slots=True)
 class Secrets:
     """Container bundling all supported secret entries."""
 
@@ -118,6 +126,7 @@ class Secrets:
     neo4j: Optional[Neo4jSecrets] = None
     dify_knowledge_base: Optional[DifyKnowledgeBaseSecrets] = None
     mineru: Optional[MineruSecrets] = None
+    supabase: Optional[SupabaseSecrets] = None
 
 
 def discover_secrets_path() -> Path:
@@ -217,6 +226,14 @@ def load_secrets(path: Optional[Path] = None) -> Secrets:
         if api_url and token:
             mineru_secrets = MineruSecrets(api_url=api_url.rstrip("/"), token=token)
 
+    supabase_data = data.get("supabase")
+    supabase_secrets = None
+    if isinstance(supabase_data, Mapping):
+        api_url = _get_opt_str(supabase_data, "api_url")
+        token = _get_opt_str(supabase_data, "token")
+        if api_url and token:
+            supabase_secrets = SupabaseSecrets(api_url=api_url, token=token)
+
     return Secrets(
         openai=openai_secrets,
         mcp_servers=dict(mcp_entries),
@@ -225,6 +242,7 @@ def load_secrets(path: Optional[Path] = None) -> Secrets:
         neo4j=neo4j_secrets,
         dify_knowledge_base=dify_secrets,
         mineru=mineru_secrets,
+        supabase=supabase_secrets,
     )
 
 
@@ -280,6 +298,7 @@ __all__ = [
     "DifyKnowledgeBaseSecrets",
     "MineruSecrets",
     "Secrets",
+    "SupabaseSecrets",
     "discover_secrets_path",
     "load_secrets",
 ]

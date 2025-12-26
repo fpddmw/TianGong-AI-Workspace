@@ -10,9 +10,9 @@
 ## Directory Layout
 - `install_*.sh` / `install_windows.ps1`: one-click installers.
 - `src/tiangong_ai_workspace/`: workspace Python package and CLI entrypoint.
-  - `cli.py`: Typer CLI with `docs`, `agents`, `gemini`, `research`, `knowledge`, `embeddings`, `crossref`, `openalex`, and `mcp` subcommands.
+  - `cli.py`: Typer CLI with `docs`, `agents`, `gemini`, `research`, `knowledge`, `embeddings`、`citation-study`, `crossref`, `openalex`, and `mcp` subcommands.
   - `agents/`: LangGraph document workflows (`workflows.py`), dual-engine autonomous agents for LangGraph/DeepAgents (`deep_agent.py`), and LangChain Tools with Pydantic input/output validation (`tools.py`).
-  - `tooling/`: response envelope, workspace config loader (`config.py`), tool registry, model router (`llm.py`), shared tool schemas (`tool_schemas.py`), Tavily MCP client, Gemini Deep Research Interactions API client (`gemini.py`), Crossref Works API client (`crossref.py`), OpenAlex Works/Cited-by client (`openalex.py`), Dify knowledge-base client (`dify.py`), Neo4j client (`neo4j.py`), and audited Shell/Python executors.
+  - `tooling/`: response envelope, workspace config loader (`config.py`), tool registry, model router (`llm.py`), shared tool schemas (`tool_schemas.py`), Tavily MCP client, Gemini Deep Research Interactions API client (`gemini.py`)、OpenAlex 引用潜力与类型识别客户端 (`openalex.py`), Crossref Works API client (`crossref.py`), OpenAlex Works/Cited-by client (`openalex.py`), Dify knowledge-base client (`dify.py`), Neo4j client (`neo4j.py`), and audited Shell/Python executors.
   - `templates/`: structural prompts for different document types.
   - `mcp_client.py`: synchronous MCP client wrapper.
   - `secrets.py`: credential loader.
@@ -207,6 +207,30 @@ uv run tiangong-workspace embeddings generate "text A" "text B" \
 ```
 
 命令默认输出摘要信息，追加 `--json` 会返回包含 `embeddings`、`model`、`dimensions`、`usage` 的结构化 `WorkspaceResponse`，方便直接写入向量数据库或串接 Agent 工具。若连接到无鉴权的本地模型，可将 `api_key` 置为空字符串即可兼容。
+
+## 引用潜力分析（OpenAlex）
+`openalex-fetch` 用于前置拉取元数据并可选下载 PDF，便于离线处理。`citation-study` 现有两种全文模式：默认 `--mode supabase` 参考 journal-band-citation，按 DOI 调用 Supabase sci_search 均匀抽取全文段落（可直接用 `--doi` 自动拉取 OpenAlex 元数据，无需先跑 openalex-fetch）；或 `--mode pdf` 直接从本地 PDF 抽取文本（`--pdf` 单文件或 `--pdf-dir` 批量匹配）。`--use-mineru` 可选启用图表拆解，Supabase 模式下必须额外提供 PDF 供 Mineru 读取。模型基于 RCR 核心规则库，用 OpenAI `response_format`(`json_schema`) 输出 High/Middle/Low 引文带、四维度评分、行动计划及 RCR 契合度：
+
+```bash
+uv run tiangong-workspace citation-study \
+  --mode supabase \
+  --doi 10.1234/abc \
+  --supabase-top-k 10 \
+  --supabase-est-k 80 \
+  --pdf-dir ./papers \
+  --use-mineru \
+  --json
+
+# 本地 PDF 抽取文本（单篇）
+uv run tiangong-workspace citation-study \
+  --mode pdf \
+  --doi 10.2345/xyz \
+  --pdf ./papers/sample.pdf
+```
+
+- 预测字段：`prediction.estimated_band`（High/Middle/Low）、`confidence_score`、`key_reason`。
+- 维度评分：`dimension_scores.topic/methodology/data/impact` 返回 1-3 分 + 优/中/差及规则编号的分析。
+- 行动建议：`action_plan` 直接给出提升引文潜力的修改清单
 
 ## PDF 图片解析（Mineru）
 `mineru-with-images` 子命令直接调用工作区内部的 Mineru API（`/mineru_with_images`），完成 PDF 文档中图片的识别与解析，支持最小调用和 MinIO 结果落盘：

@@ -6,7 +6,7 @@
 - Primary entry point: `uv run tiangong-workspace`, featuring LangChain/LangGraph document agents, LangGraph planning agents, and Tavily MCP research.
 
 ## Repository Layout
-- `src/tiangong_ai_workspace/cli.py`: Typer CLI with `docs`, `agents`, `gemini`, `research`, and `mcp` subcommands plus structured JSON output support.
+- `src/tiangong_ai_workspace/cli.py`: Typer CLI with `docs`, `agents`, `gemini`, `research`, `knowledge`, `embeddings`, `citation-study`and `mcp` subcommands plus structured JSON output support.
 - `src/tiangong_ai_workspace/agents/`:
   - `workflows.py`: LangChain/LangGraph document workflows (reports, plans, patent, proposals).
   - `deep_agent.py`: Workspace autonomous agent supporting both native LangGraph loops and the `deepagents` runtime.
@@ -23,6 +23,7 @@
   - `crossref.py`: HTTP client for Crossref Works API `/journals/{issn}/works`.
   - `openalex.py`: HTTP client for OpenAlex works lookup and cited-by queries.
   - `dify.py`: Direct HTTP client for the Dify knowledge base (no MCP required).
+  - `openalex.py`: OpenAlex client plus LLM-driven review/研究类型识别与引用潜力分类（可结合图表摘要）。
   - `mineru.py`: HTTP client for the Mineru PDF image extraction API.
   - `neo4j.py`: Neo4j driver wrapper used by CRUD tools and registry metadata.
   - `executors.py`: Shell/Python execution helpers with timeouts, allow-lists, and structured telemetry for agent consumption.
@@ -67,6 +68,9 @@ All three must pass before sharing updates.
 - `uv run tiangong-workspace crossref journal-works "<issn>" [--query ...]` — fetch journal works via Crossref `/journals/{issn}/works`.
 - `uv run tiangong-workspace knowledge retrieve "<query>"` — call the Dify knowledge base API without MCP；可用 `--search-method`、`--reranking/--no-reranking`、`--reranking-provider/--reranking-model`、`--score-threshold`、`--semantic-weight` 与 `--metadata` 快速配置 Dify `retrieval_model` 与元数据过滤。
 - `uv run tiangong-workspace embeddings generate "<text>"` — 调用 OpenAI 兼容 embedding 服务，支持批量文本、`--model/--json`。
+- `uv run tiangong-workspace openalex-fetch "topic" --limit 20 --download-dir ./papers` — 预取 OpenAlex 元数据并尝试下载 PDF。
+- `uv run tiangong-workspace journal-bands-analyze --issn <issn> --journal "<name>"` — Supabase 取样全文后用 OpenAI `response_format`(`json_schema`) 严格输出五维度特征分析，默认每档位随机抽样 10% 并发处理（≤10 线程），会自动过滤无 DOI 及标题包含 “Corrigendum to …”/“Editorial Board” 的记录。
+- `uv run tiangong-workspace citation-study --mode supabase --doi 10.1234/abc --pdf-dir ./papers --use-mineru` — 两种模式：`supabase` 可直接用 `--doi` 拉取 OpenAlex 元数据后走 Supabase sci_search 获取全文（若开启 `--use-mineru` 必须提供 PDF 以拆解图表；也可继续使用 --works-file 批量处理）；`pdf` 直接读取本地 PDF 抽取全文。LLM 采用 RCR 核心规则库 + OpenAI `response_format` JSON schema 输出 High/Middle/Low 引文带、四维评分与行动建议，已取消启发式评分。
 - `uv run tiangong-workspace mineru-with-images ./file.pdf --prompt "解析图表"` — 调用 Mineru PDF 图片解析 API，支持 MinIO 落盘与模型透传。
 - `uv run tiangong-workspace mcp services|tools|invoke` — inspect and call configured MCP services.
 

@@ -43,7 +43,12 @@ class WorkspaceResponse(Generic[ResponsePayload]):
 
     def to_json(self, *, indent: int | None = 2) -> str:
         """Serialise the response using `json.dumps`."""
-        return json.dumps(self.to_dict(), indent=indent, ensure_ascii=True)
+        # Use ensure_ascii=False so that non-ASCII (e.g. Chinese) characters
+        # are preserved as UTF-8 characters in the JSON output rather than
+        # escaped \u... sequences. The CLI writes the JSON bytes as UTF-8
+        # to stdout when requested, ensuring correct display when
+        # redirecting output to files.
+        return json.dumps(self.to_dict(), indent=indent, ensure_ascii=False)
 
     @staticmethod
     def ok(payload: ResponsePayload | None = None, message: str = "OK", **metadata: Any) -> "WorkspaceResponse[ResponsePayload]":
