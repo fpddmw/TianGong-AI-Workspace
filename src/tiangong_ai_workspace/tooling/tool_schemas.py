@@ -13,6 +13,14 @@ from typing import Any, Literal, Mapping, MutableMapping
 from pydantic import BaseModel, Field
 
 __all__ = [
+    "CrossrefJournalWorksInput",
+    "CrossrefQueryOutput",
+    "OpenAlexWorkLookupInput",
+    "OpenAlexWorkLookupOutput",
+    "OpenAlexCitedByInput",
+    "OpenAlexCitedByOutput",
+    "GeminiDeepResearchInput",
+    "GeminiDeepResearchOutput",
     "DocumentToolInput",
     "DocumentToolOutput",
     "DifyKnowledgeBaseInput",
@@ -87,6 +95,81 @@ class TavilySearchInput(BaseModel):
 
 
 class TavilySearchOutput(BaseModel):
+    status: Literal["success", "error"]
+    data: Mapping[str, Any] | None = None
+    message: str | None = None
+
+
+class GeminiDeepResearchInput(BaseModel):
+    prompt: str = Field(..., description="Research prompt sent to the Gemini Deep Research agent.")
+    agent: str | None = Field(default=None, description="Override the Deep Research agent name (defaults to secrets).")
+    file_search_stores: list[str] | None = Field(
+        default=None,
+        description="Optional File Search store names to expose private data.",
+    )
+    include_thinking_summaries: bool = Field(
+        default=True,
+        description="Enable thinking summaries in the agent config.",
+    )
+
+
+class GeminiDeepResearchOutput(BaseModel):
+    status: Literal["success", "error"]
+    interaction: Mapping[str, Any] | None = None
+    interaction_id: str | None = None
+    message: str | None = None
+
+
+class CrossrefJournalWorksInput(BaseModel):
+    issn: str = Field(..., description="ISSN of the journal to query (e.g. 1234-5678).")
+    query: str | None = Field(default=None, description="Optional free-text query applied to works.")
+    filters: Mapping[str, Any] | list[str] | str | None = Field(
+        default=None,
+        description="Crossref filter expressions (mapping, list of strings, or pre-composed filter string).",
+    )
+    sort: str | None = Field(default=None, description="Crossref sort field (e.g. score, published, updated).")
+    order: Literal["asc", "desc"] | None = Field(default=None, description="Sort direction for Crossref results.")
+    rows: int | None = Field(default=None, ge=1, le=1000, description="Maximum results to return (1-1000).")
+    offset: int | None = Field(default=None, ge=0, description="Offset for offset-based pagination.")
+    cursor: str | None = Field(default=None, description="Cursor token for deep paging (`*` for first page).")
+    cursor_max: int | None = Field(default=None, ge=0, description="Maximum records scanned when using cursor.")
+    sample: int | None = Field(default=None, ge=1, description="Random sample size (incompatible with cursor).")
+    select: list[str] | str | None = Field(default=None, description="Comma-separated fields to include in the response.")
+    mailto: str | None = Field(default=None, description="Optional contact email forwarded to Crossref.")
+
+
+class CrossrefQueryOutput(BaseModel):
+    status: Literal["success", "error"]
+    data: Mapping[str, Any] | None = None
+    message: str | None = None
+
+
+class OpenAlexWorkLookupInput(BaseModel):
+    doi: str = Field(..., description="DOI to look up in OpenAlex.")
+    mailto: str | None = Field(default=None, description="Optional contact email forwarded to OpenAlex.")
+
+
+class OpenAlexWorkLookupOutput(BaseModel):
+    status: Literal["success", "error"]
+    data: Mapping[str, Any] | None = None
+    message: str | None = None
+
+
+class OpenAlexCitedByInput(BaseModel):
+    work_id: str = Field(..., description="OpenAlex work ID (e.g. W2072484418).")
+    from_publication_date: str | None = Field(default=None, description="Filter citing works published on/after this date (YYYY-MM-DD).")
+    to_publication_date: str | None = Field(default=None, description="Filter citing works published on/before this date (YYYY-MM-DD).")
+    per_page: int | None = Field(
+        default=200,
+        ge=1,
+        le=200,
+        description="Number of records per page (OpenAlex max 200).",
+    )
+    cursor: str | None = Field(default=None, description="Cursor token for deep pagination.")
+    mailto: str | None = Field(default=None, description="Optional contact email forwarded to OpenAlex.")
+
+
+class OpenAlexCitedByOutput(BaseModel):
     status: Literal["success", "error"]
     data: Mapping[str, Any] | None = None
     message: str | None = None
@@ -225,10 +308,14 @@ _DESCRIPTOR_SCHEMAS: Mapping[str, _SchemaPair] = {
     "research.tavily": _SchemaPair(TavilySearchInput, TavilySearchOutput),
     "knowledge.dify": _SchemaPair(DifyKnowledgeBaseInput, DifyKnowledgeBaseOutput),
     "database.neo4j": _SchemaPair(Neo4jCommandInput, Neo4jCommandOutput),
+    "research.crossref_journal_works": _SchemaPair(CrossrefJournalWorksInput, CrossrefQueryOutput),
+    "research.openalex_work": _SchemaPair(OpenAlexWorkLookupInput, OpenAlexWorkLookupOutput),
+    "research.openalex_cited_by": _SchemaPair(OpenAlexCitedByInput, OpenAlexCitedByOutput),
     "docs.report": _SchemaPair(DocumentToolInput, DocumentToolOutput),
     "docs.patent_disclosure": _SchemaPair(DocumentToolInput, DocumentToolOutput),
     "docs.plan": _SchemaPair(DocumentToolInput, DocumentToolOutput),
     "docs.project_proposal": _SchemaPair(DocumentToolInput, DocumentToolOutput),
+    "research.gemini_deep_research": _SchemaPair(GeminiDeepResearchInput, GeminiDeepResearchOutput),
 }
 
 

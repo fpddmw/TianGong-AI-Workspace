@@ -155,3 +155,4 @@ pdfs
 uv.lock
 
 .sercrets/secrets.toml
+my_workspace/

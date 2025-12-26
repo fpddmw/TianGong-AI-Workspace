@@ -25,9 +25,12 @@ from .mcp_client import MCPToolClient
 from .secrets import MCPServerSecrets, discover_secrets_path, load_secrets
 from .tooling import WorkspaceResponse, list_registered_tools
 from .tooling.config import CLIToolConfig, load_workspace_config
+from .tooling.crossref import CrossrefClient, CrossrefClientError
 from .tooling.dify import DifyKnowledgeBaseClient, DifyKnowledgeBaseError
 from .tooling.embeddings import OpenAICompatibleEmbeddingClient, OpenAIEmbeddingError
+from .tooling.gemini import GeminiDeepResearchClient, GeminiDeepResearchError
 from .tooling.llm import ModelPurpose
+from .tooling.openalex import OpenAlexClient, OpenAlexClientError
 from .tooling.mineru import MineruClient, MineruClientError
 from .tooling.tavily import TavilySearchClient, TavilySearchError
 
@@ -42,6 +45,12 @@ knowledge_app = typer.Typer(help="Knowledge base utilities such as Dify dataset 
 app.add_typer(knowledge_app, name="knowledge")
 embeddings_app = typer.Typer(help="OpenAI-compatible embedding helpers.")
 app.add_typer(embeddings_app, name="embeddings")
+crossref_app = typer.Typer(help="Crossref metadata utilities.")
+app.add_typer(crossref_app, name="crossref")
+openalex_app = typer.Typer(help="OpenAlex metadata utilities.")
+app.add_typer(openalex_app, name="openalex")
+gemini_app = typer.Typer(help="Gemini API helpers including the Deep Research agent.")
+app.add_typer(gemini_app, name="gemini")
 
 WORKFLOW_SUMMARIES = {
     DocumentWorkflowType.REPORT: "Business and technical reports with clear recommendations.",
@@ -248,6 +257,8 @@ def agents_run(
     no_tavily: bool = typer.Option(False, "--no-tavily", help="Disable Tavily web search tool."),
     no_dify: bool = typer.Option(False, "--no-dify", help="Disable Dify knowledge base tool."),
     no_document: bool = typer.Option(False, "--no-document", help="Disable document generation tool."),
+    no_crossref: bool = typer.Option(False, "--no-crossref", help="Disable Crossref journal works tool."),
+    no_openalex: bool = typer.Option(False, "--no-openalex", help="Disable OpenAlex tools."),
     engine: str = typer.Option(
         "langgraph",
         "--engine",
@@ -265,6 +276,8 @@ def agents_run(
             include_tavily=not no_tavily,
             include_dify_knowledge=not no_dify,
             include_document_agent=not no_document,
+            include_crossref=not no_crossref,
+            include_openalex=not no_openalex,
             system_prompt=system_prompt,
             engine=engine,
         )
@@ -601,6 +614,124 @@ def _emit_response(response: WorkspaceResponse, json_output: bool) -> None:
             typer.echo(f"- {err}")
 
 
+@gemini_app.command("deep-research")
+def gemini_deep_research(
+    prompt: Optional[str] = typer.Argument(
+        None,
+        help="Research prompt for the Gemini Deep Research agent.",
+        metavar="PROMPT",
+    ),
+    interaction_id: Optional[str] = typer.Option(
+        None,
+        "--interaction-id",
+        help="Existing interaction ID to poll or inspect instead of creating a new task.",
+    ),
+    agent: Optional[str] = typer.Option(None, "--agent", help="Override the Deep Research agent name."),
+    file_search_store: list[str] = typer.Option(
+        [],
+        "--file-search-store",
+        help="Attach File Search store names to expose private data to the agent.",
+    ),
+    poll: bool = typer.Option(False, "--poll", help="Poll until the interaction completes."),
+    poll_interval: float = typer.Option(
+        10.0,
+        "--poll-interval",
+        min=1.0,
+        help="Seconds to wait between polling requests (default: 10s).",
+    ),
+    max_polls: int = typer.Option(
+        360,
+        "--max-polls",
+        min=1,
+        help="Maximum number of polls before timing out (default: 360 for ~1 hour at 10s).",
+    ),
+    thinking_summaries: bool = typer.Option(
+        True,
+        "--thinking-summaries/--no-thinking-summaries",
+        help="Enable thinking summaries in the Deep Research agent config.",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Emit a machine-readable JSON response."),
+) -> None:
+    """Launch or poll a Gemini Deep Research task using background execution."""
+
+    if not prompt and not interaction_id:
+        typer.secho("Provide a PROMPT or --interaction-id to resume an existing task.", fg=typer.colors.RED)
+        raise typer.Exit(code=2)
+
+    try:
+        client = GeminiDeepResearchClient()
+    except GeminiDeepResearchError as exc:
+        response = WorkspaceResponse.error("Gemini Deep Research client initialisation failed.", errors=(str(exc),), source="gemini")
+        _emit_response(response, json_output)
+        raise typer.Exit(code=3)
+
+    started = False
+    initial_result: Mapping[str, Any] | None = None
+    target_interaction_id = interaction_id
+    try:
+        if interaction_id:
+            initial_result = client.get_interaction(interaction_id)
+        else:
+            initial_result = client.start_research(
+                prompt or "",
+                agent=agent,
+                file_search_stores=file_search_store or None,
+                include_thinking_summaries=thinking_summaries,
+            )
+            started = True
+            target_interaction_id = initial_result.get("interaction_id")
+    except GeminiDeepResearchError as exc:
+        response = WorkspaceResponse.error("Gemini Deep Research request failed.", errors=(str(exc),), source="gemini")
+        _emit_response(response, json_output)
+        raise typer.Exit(code=4)
+
+    final_result = None
+    if poll:
+        if not target_interaction_id:
+            response = WorkspaceResponse.error(
+                "Cannot poll without an interaction ID.",
+                errors=("Interaction ID missing from start response.",),
+                source="gemini",
+            )
+            _emit_response(response, json_output)
+            raise typer.Exit(code=5)
+        try:
+            final_result = client.poll_until_complete(
+                target_interaction_id,
+                interval=poll_interval,
+                max_attempts=max_polls,
+            )
+        except GeminiDeepResearchError as exc:
+            response = WorkspaceResponse.error("Gemini Deep Research polling failed.", errors=(str(exc),), source="gemini")
+            _emit_response(response, json_output)
+            raise typer.Exit(code=6)
+
+    payload = {
+        "interaction": initial_result,
+        "interaction_id": target_interaction_id,
+        "final_interaction": final_result,
+        "polling": poll,
+        "started": started,
+    }
+    message = "Gemini Deep Research run completed." if final_result else "Gemini Deep Research request submitted."
+    response = WorkspaceResponse.ok(payload=payload, message=message, source="gemini")
+    _emit_response(response, json_output)
+
+    if not json_output:
+        typer.echo("")
+        typer.echo(f"Interaction ID: {target_interaction_id or '(unknown)'}")
+        typer.echo(f"Current status: {initial_result.get('status') if isinstance(initial_result, Mapping) else 'unknown'}")
+        if final_result:
+            typer.echo(f"Final status: {final_result.get('status')}")
+            interaction_body = final_result.get("interaction") if isinstance(final_result, Mapping) else None
+            outputs = interaction_body.get("outputs") if isinstance(interaction_body, Mapping) else None
+            if outputs:
+                typer.echo("Final output:")
+                typer.echo(_format_result(outputs[-1]))
+            else:
+                typer.echo("No outputs returned yet. Inspect the JSON payload for details.")
+
+
 @app.command()
 def research(
     query: str = typer.Argument(..., help="Query string to send to the Tavily MCP service."),
@@ -624,6 +755,158 @@ def research(
     if not json_output:
         typer.echo("")
         typer.echo("Top-level research result:")
+        typer.echo(_format_result(result.get("result")))
+
+
+@openalex_app.command("work")
+def openalex_work(
+    doi: str = typer.Argument(..., help="DOI to look up in OpenAlex (with or without https://doi.org/ prefix)."),
+    mailto: Optional[str] = typer.Option(None, "--mailto", help="Optional contact email forwarded to OpenAlex."),
+    json_output: bool = typer.Option(False, "--json", help="Emit a machine-readable JSON response."),
+) -> None:
+    """Look up an OpenAlex work record by DOI."""
+
+    try:
+        client = OpenAlexClient(mailto=mailto)
+        result = client.work_by_doi(doi if doi.lower().startswith("10.") else doi)
+    except OpenAlexClientError as exc:
+        response = WorkspaceResponse.error("OpenAlex work lookup failed.", errors=(str(exc),), source="openalex")
+        _emit_response(response, json_output)
+        raise typer.Exit(code=20)
+
+    response = WorkspaceResponse.ok(payload=result, message="OpenAlex work lookup completed.", source="openalex")
+    _emit_response(response, json_output)
+
+    if not json_output:
+        typer.echo("")
+        typer.echo("OpenAlex work:")
+        typer.echo(_format_result(result.get("result")))
+
+
+@openalex_app.command("cited-by")
+def openalex_cited_by(
+    work_id: str = typer.Argument(..., help="OpenAlex work ID (e.g. W2072484418)."),
+    from_publication_date: Optional[str] = typer.Option(None, "--from", help="Filter citing works published on/after this date (YYYY-MM-DD)."),
+    to_publication_date: Optional[str] = typer.Option(None, "--to", help="Filter citing works published on/before this date (YYYY-MM-DD)."),
+    per_page: Optional[int] = typer.Option(
+        200,
+        "--per-page",
+        min=1,
+        max=200,
+        help="Number of citing works per page (OpenAlex max 200).",
+    ),
+    cursor: Optional[str] = typer.Option(None, "--cursor", help="Cursor token for deep pagination (use '*' for first page)."),
+    mailto: Optional[str] = typer.Option(None, "--mailto", help="Optional contact email forwarded to OpenAlex."),
+    json_output: bool = typer.Option(False, "--json", help="Emit a machine-readable JSON response."),
+) -> None:
+    """List works citing a given OpenAlex work ID with optional date filtering."""
+
+    try:
+        client = OpenAlexClient(mailto=mailto)
+        result = client.cited_by(
+            work_id,
+            from_publication_date=from_publication_date,
+            to_publication_date=to_publication_date,
+            per_page=per_page,
+            cursor=cursor,
+        )
+    except OpenAlexClientError as exc:
+        response = WorkspaceResponse.error("OpenAlex cited-by lookup failed.", errors=(str(exc),), source="openalex")
+        _emit_response(response, json_output)
+        raise typer.Exit(code=21)
+
+    response = WorkspaceResponse.ok(payload=result, message="OpenAlex cited-by lookup completed.", source="openalex")
+    _emit_response(response, json_output)
+
+    if not json_output:
+        typer.echo("")
+        typer.echo(f"Cited-by count: {result.get('total_count')}")
+        typer.echo("OpenAlex response:")
+        typer.echo(_format_result(result.get("result")))
+
+
+@crossref_app.command("journal-works")
+def crossref_journal_works(
+    issn: str = typer.Argument(..., help="Journal ISSN (e.g. 1234-5678)."),
+    query: Optional[str] = typer.Option(None, "--query", "-q", help="Optional query string applied to works."),
+    filters: Optional[str] = typer.Option(
+        None,
+        "--filters",
+        "-f",
+        help="Crossref filters as JSON (object/array) or raw filter string (e.g. from-pub-date:2020-01-01).",
+    ),
+    sort: Optional[str] = typer.Option(None, "--sort", help="Crossref sort field (score, published, updated, etc.)."),
+    order: Optional[str] = typer.Option(None, "--order", help="Sort direction (asc or desc)."),
+    rows: Optional[int] = typer.Option(
+        None,
+        "--rows",
+        min=1,
+        max=1000,
+        help="Maximum results to return (1-1000).",
+    ),
+    offset: Optional[int] = typer.Option(None, "--offset", min=0, help="Offset for pagination (incompatible with cursor)."),
+    cursor: Optional[str] = typer.Option(None, "--cursor", help="Cursor token for deep paging ('*' for first page)."),
+    cursor_max: Optional[int] = typer.Option(None, "--cursor-max", min=0, help="Maximum records scanned with cursor."),
+    sample: Optional[int] = typer.Option(None, "--sample", min=1, help="Random sample size (cannot combine with cursor)."),
+    select: Optional[str] = typer.Option(None, "--select", help="Fields to return (comma-separated or JSON array)."),
+    mailto: Optional[str] = typer.Option(None, "--mailto", help="Contact email forwarded to Crossref (recommended)."),
+    json_output: bool = typer.Option(False, "--json", help="Emit a machine-readable JSON response."),
+) -> None:
+    """Call Crossref's `/journals/{issn}/works` endpoint."""
+
+    filter_payload: Any | None = None
+    if filters:
+        try:
+            parsed_filters = json.loads(filters)
+        except json.JSONDecodeError:
+            filter_payload = filters
+        else:
+            if isinstance(parsed_filters, (Mapping, list, str)):
+                filter_payload = parsed_filters
+            else:
+                typer.secho("--filters must decode to a JSON object, array, or string.", fg=typer.colors.RED)
+                raise typer.Exit(code=17)
+
+    select_payload: Any | None = None
+    if select:
+        try:
+            parsed_select = json.loads(select)
+        except json.JSONDecodeError:
+            select_payload = select
+        else:
+            if isinstance(parsed_select, (list, str)):
+                select_payload = parsed_select
+            else:
+                typer.secho("--select must decode to a JSON string or array.", fg=typer.colors.RED)
+                raise typer.Exit(code=18)
+
+    try:
+        client = CrossrefClient()
+        result = client.list_journal_works(
+            issn,
+            query=query,
+            filters=filter_payload,
+            sort=sort,
+            order=order,
+            rows=rows,
+            offset=offset,
+            cursor=cursor,
+            cursor_max=cursor_max,
+            sample=sample,
+            select=select_payload,
+            mailto=mailto,
+        )
+    except CrossrefClientError as exc:
+        response = WorkspaceResponse.error("Crossref query failed.", errors=(str(exc),), source="crossref")
+        _emit_response(response, json_output)
+        raise typer.Exit(code=19)
+
+    response = WorkspaceResponse.ok(payload=result, message="Crossref journal works query completed.", source="crossref")
+    _emit_response(response, json_output)
+
+    if not json_output:
+        typer.echo("")
+        typer.echo("Crossref response overview:")
         typer.echo(_format_result(result.get("result")))
 
 

@@ -5,16 +5,22 @@ This package exposes lightly opinionated building blocks such as response
 schemas, tool registries, and external service wrappers that agents can reuse.
 """
 
+from .crossref import CrossrefClient
 from .dify import DifyKnowledgeBaseClient
 from .embeddings import OpenAICompatibleEmbeddingClient
 from .executors import PythonExecutor, ShellExecutor
 from .mineru import MineruClient
+from .gemini import GeminiDeepResearchClient
 from .neo4j import Neo4jClient
+from .openalex import OpenAlexClient
 from .registry import ToolDescriptor, list_registered_tools
 from .responses import ResponsePayload, WorkspaceResponse
 
 __all__ = [
+    "CrossrefClient",
+    "OpenAlexClient",
     "DifyKnowledgeBaseClient",
+    "GeminiDeepResearchClient",
     "OpenAICompatibleEmbeddingClient",
     "MineruClient",
     "PythonExecutor",

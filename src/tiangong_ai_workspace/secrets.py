@@ -39,6 +39,15 @@ class OpenAICompatibleEmbeddingSecrets:
 
 
 @dataclass(slots=True)
+class GeminiSecrets:
+    """Secrets required to call the Gemini Interactions API."""
+
+    api_key: str
+    agent: str = "deep-research-pro-preview-12-2025"
+    api_endpoint: Optional[str] = None
+
+
+@dataclass(slots=True)
 class MCPServerSecrets:
     """Transport configuration needed to reach an MCP service."""
 
@@ -104,6 +113,7 @@ class Secrets:
 
     openai: Optional[OpenAISecrets]
     mcp_servers: Mapping[str, MCPServerSecrets]
+    gemini: Optional[GeminiSecrets] = None
     openai_compatible_embedding: Optional[OpenAICompatibleEmbeddingSecrets] = None
     neo4j: Optional[Neo4jSecrets] = None
     dify_knowledge_base: Optional[DifyKnowledgeBaseSecrets] = None
@@ -141,6 +151,15 @@ def load_secrets(path: Optional[Path] = None) -> Secrets:
             chat_model=_get_opt_str(openai_data, "chat_model"),
             deep_research_model=_get_opt_str(openai_data, "deep_research_model"),
         )
+
+    gemini_data = data.get("gemini")
+    gemini_secrets = None
+    if isinstance(gemini_data, Mapping):
+        api_key = _get_opt_str(gemini_data, "api_key")
+        agent_name = _get_opt_str(gemini_data, "agent") or "deep-research-pro-preview-12-2025"
+        api_endpoint = _get_opt_str(gemini_data, "api_endpoint")
+        if api_key:
+            gemini_secrets = GeminiSecrets(api_key=api_key, agent=agent_name, api_endpoint=api_endpoint)
 
     mcp_entries: Dict[str, MCPServerSecrets] = {}
     for section_name, section in data.items():
@@ -201,6 +220,7 @@ def load_secrets(path: Optional[Path] = None) -> Secrets:
     return Secrets(
         openai=openai_secrets,
         mcp_servers=dict(mcp_entries),
+        gemini=gemini_secrets,
         openai_compatible_embedding=embedding_data,
         neo4j=neo4j_secrets,
         dify_knowledge_base=dify_secrets,
@@ -255,6 +275,7 @@ __all__ = [
     "MCPServerSecrets",
     "OpenAICompatibleEmbeddingSecrets",
     "OpenAISecrets",
+    "GeminiSecrets",
     "Neo4jSecrets",
     "DifyKnowledgeBaseSecrets",
     "MineruSecrets",

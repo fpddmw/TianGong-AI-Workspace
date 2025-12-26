@@ -171,6 +171,27 @@ DEFAULT_REGISTRY_ENTRIES: tuple[RegistryEntryConfig, ...] = (
         tags=("research", "search"),
     ),
     RegistryEntryConfig(
+        name="research.crossref_journal_works",
+        description="Fetch works for a journal using Crossref's /journals/{issn}/works endpoint.",
+        category="integration",
+        entrypoint="tiangong_ai_workspace.tooling.crossref.CrossrefClient.list_journal_works",
+        tags=("research", "crossref", "literature"),
+    ),
+    RegistryEntryConfig(
+        name="research.openalex_work",
+        description="Look up an OpenAlex work record by DOI.",
+        category="integration",
+        entrypoint="tiangong_ai_workspace.tooling.openalex.OpenAlexClient.work_by_doi",
+        tags=("research", "openalex", "literature"),
+    ),
+    RegistryEntryConfig(
+        name="research.openalex_cited_by",
+        description="List works citing a given OpenAlex work ID with optional date filtering.",
+        category="integration",
+        entrypoint="tiangong_ai_workspace.tooling.openalex.OpenAlexClient.cited_by",
+        tags=("research", "openalex", "citations"),
+    ),
+    RegistryEntryConfig(
         name="agents.deep",
         description="Workspace autonomous agent built with LangGraph (shell, Python, Tavily, document workflows).",
         category="agent",

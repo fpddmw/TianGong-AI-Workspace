@@ -10,10 +10,19 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.runnables import Runnable
 
 from tiangong_ai_workspace.agents.deep_agent import build_workspace_deep_agent
-from tiangong_ai_workspace.secrets import DifyKnowledgeBaseSecrets, MCPServerSecrets, Neo4jSecrets, Secrets
-from tiangong_ai_workspace.tooling import PythonExecutor, ShellExecutor, WorkspaceResponse, list_registered_tools
+from tiangong_ai_workspace.secrets import DifyKnowledgeBaseSecrets, GeminiSecrets, MCPServerSecrets, Neo4jSecrets, Secrets
+from tiangong_ai_workspace.tooling import (
+    GeminiDeepResearchClient,
+    PythonExecutor,
+    ShellExecutor,
+    WorkspaceResponse,
+    list_registered_tools,
+)
+from tiangong_ai_workspace.tooling.crossref import CrossrefClient, CrossrefClientError
 from tiangong_ai_workspace.tooling.dify import DifyKnowledgeBaseClient, DifyKnowledgeBaseError
+from tiangong_ai_workspace.tooling.gemini import GeminiDeepResearchError
 from tiangong_ai_workspace.tooling.neo4j import Neo4jClient, Neo4jToolError
+from tiangong_ai_workspace.tooling.openalex import OpenAlexClient
 from tiangong_ai_workspace.tooling.tavily import TavilySearchClient, TavilySearchError
 
 
@@ -33,6 +42,10 @@ def test_tool_registry_contains_core_workflows() -> None:
     assert "runtime.shell" in registry
     assert "runtime.python" in registry
     assert "embeddings.openai_compatible" in registry
+    assert "research.crossref_journal_works" in registry
+    assert "research.openalex_work" in registry
+    assert "research.openalex_cited_by" in registry
+    assert "research.gemini_deep_research" in registry
 
 
 def test_tavily_client_missing_service_raises() -> None:
@@ -105,6 +118,181 @@ def test_dify_client_retrieve(monkeypatch: pytest.MonkeyPatch) -> None:
     assert filters["logical_operator"] == "and"
     assert filters["conditions"][0]["name"] == "tag"
     assert captured["headers"]["Authorization"] == "Bearer dataset-123"
+
+
+def test_crossref_client_list_journal_works(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = CrossrefClient(timeout=1.0)
+    captured: dict[str, Any] = {}
+
+    class _StubResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> Mapping[str, Any]:
+            return {"message": {"items": [{"title": ["Example"]}], "total-results": 1}}
+
+    def fake_get(self, url: str, *, params: Mapping[str, Any], headers: Mapping[str, str]):
+        captured["url"] = url
+        captured["params"] = params
+        captured["headers"] = headers
+        return _StubResponse()
+
+    monkeypatch.setattr(CrossrefClient, "_get", fake_get, raising=False)
+
+    result = client.list_journal_works(
+        "1234-5678",
+        query="ai",
+        filters={"from-pub-date": "2020-01-01", "until-pub-date": "2020-12-31"},
+        sort="published",
+        order="asc",
+        rows=5,
+        select=["title", "DOI"],
+        mailto="test@example.com",
+    )
+
+    assert captured["url"].endswith("/journals/1234-5678/works")
+    assert captured["params"]["query"] == "ai"
+    assert "from-pub-date:2020-01-01" in captured["params"]["filter"]
+    assert captured["params"]["order"] == "asc"
+    assert captured["params"]["rows"] == 5
+    assert captured["params"]["select"] == "title,DOI"
+    assert captured["params"]["mailto"] == "test@example.com"
+    assert result["issn"] == "1234-5678"
+    assert result["result"]["message"]["total-results"] == 1
+
+
+def test_crossref_client_rejects_offset_and_cursor() -> None:
+    client = CrossrefClient()
+    with pytest.raises(CrossrefClientError):
+        client.list_journal_works("1234-5678", offset=1, cursor="*")
+
+
+def test_openalex_client_work_by_doi(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = OpenAlexClient(timeout=1.0)
+    captured: dict[str, Any] = {}
+
+    class _StubResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> Mapping[str, Any]:
+            return {"id": "https://openalex.org/W123"}
+
+    def fake_get(self, url: str, *, params: Mapping[str, Any]):
+        captured["url"] = url
+        captured["params"] = params
+        return _StubResponse()
+
+    monkeypatch.setattr(OpenAlexClient, "_get", fake_get, raising=False)
+    result = client.work_by_doi("10.1234/example", mailto="a@b.com")
+    assert "example" in captured["url"]
+    assert captured["params"]["mailto"] == "a@b.com"
+    assert result["result"]["id"] == "https://openalex.org/W123"
+
+
+def test_openalex_client_cited_by(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = OpenAlexClient(timeout=1.0)
+    captured: dict[str, Any] = {}
+
+    class _StubResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> Mapping[str, Any]:
+            return {"meta": {"count": 2}, "results": [{"id": 1}]}
+
+    def fake_get(self, url: str, *, params: Mapping[str, Any]):
+        captured["url"] = url
+        captured["params"] = params
+        return _StubResponse()
+
+    monkeypatch.setattr(OpenAlexClient, "_get", fake_get, raising=False)
+    result = client.cited_by(
+        "W123",
+        from_publication_date="2020-01-01",
+        to_publication_date="2021-01-01",
+        per_page=100,
+        cursor="*",
+        mailto="a@b.com",
+    )
+    assert "cites:W123" in captured["params"]["filter"]
+    assert "from_publication_date:2020-01-01" in captured["params"]["filter"]
+    assert captured["params"]["per-page"] == 100
+    assert captured["params"]["cursor"] == "*"
+    assert captured["params"]["mailto"] == "a@b.com"
+    assert result["total_count"] == 2
+
+
+def test_gemini_client_missing_configuration_raises() -> None:
+    secrets = Secrets(openai=None, mcp_servers={})
+    with pytest.raises(GeminiDeepResearchError):
+        GeminiDeepResearchClient(secrets=secrets)
+
+
+def test_gemini_client_start_research_builds_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+    config = GeminiSecrets(api_key="key-123", agent="deep-research-pro-preview-12-2025")
+    secrets = Secrets(openai=None, mcp_servers={}, gemini=config)
+    client = GeminiDeepResearchClient(secrets=secrets)
+
+    captured: dict[str, Any] = {}
+
+    class _StubResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> Mapping[str, Any]:
+            return {"id": "abc123", "status": "in_progress", "outputs": []}
+
+    def fake_post(self, url: str, *, headers: Mapping[str, str], json: Mapping[str, Any]):
+        captured["url"] = url
+        captured["headers"] = headers
+        captured["json"] = json
+        return _StubResponse()
+
+    monkeypatch.setattr(GeminiDeepResearchClient, "_post", fake_post, raising=False)
+    result = client.start_research("Test prompt", file_search_stores=["storeA"])
+
+    assert captured["headers"]["x-goog-api-key"] == "key-123"
+    assert captured["json"]["background"] is True
+    assert captured["json"]["store"] is True
+    assert captured["json"]["tools"][0]["file_search_store_names"] == ["storeA"]
+    assert captured["json"]["agent_config"]["thinking_summaries"] == "auto"
+    assert result["interaction_id"] == "abc123"
+
+
+def test_gemini_client_poll_until_complete(monkeypatch: pytest.MonkeyPatch) -> None:
+    config = GeminiSecrets(api_key="key-123", agent="deep-research-pro-preview-12-2025")
+    secrets = Secrets(openai=None, mcp_servers={}, gemini=config)
+    client = GeminiDeepResearchClient(secrets=secrets)
+    calls: list[str] = []
+
+    def fake_get(self, interaction_id: str):
+        calls.append(interaction_id)
+        if len(calls) < 2:
+            return {"interaction_id": interaction_id, "status": "in_progress"}
+        return {"interaction_id": interaction_id, "status": "completed", "interaction": {"outputs": [{"text": "done"}]}}
+
+    monkeypatch.setattr(GeminiDeepResearchClient, "get_interaction", fake_get, raising=False)
+    monkeypatch.setattr("tiangong_ai_workspace.tooling.gemini.time.sleep", lambda _: None)
+
+    result = client.poll_until_complete("abc", interval=0.0, max_attempts=3)
+    assert result["status"] == "completed"
+    assert calls == ["abc", "abc"]
+
+
+def test_gemini_client_poll_until_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    config = GeminiSecrets(api_key="key-123", agent="deep-research-pro-preview-12-2025")
+    secrets = Secrets(openai=None, mcp_servers={}, gemini=config)
+    client = GeminiDeepResearchClient(secrets=secrets)
+
+    def fake_get(self, interaction_id: str):
+        return {"interaction_id": interaction_id, "status": "failed", "interaction": {"error": "boom"}}
+
+    monkeypatch.setattr(GeminiDeepResearchClient, "get_interaction", fake_get, raising=False)
+    monkeypatch.setattr("tiangong_ai_workspace.tooling.gemini.time.sleep", lambda _: None)
+
+    with pytest.raises(GeminiDeepResearchError):
+        client.poll_until_complete("abc", interval=0.0, max_attempts=2)
 
 
 def test_shell_executor_runs_command() -> None:

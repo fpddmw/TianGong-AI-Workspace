@@ -26,9 +26,11 @@ from ..tooling.llm import ModelRouter
 from ..tooling.neo4j import Neo4jToolError
 from ..tooling.tavily import TavilySearchClient, TavilySearchError
 from .tools import (
+    create_crossref_tool,
     create_dify_knowledge_tool,
     create_document_tool,
     create_neo4j_tool,
+    create_openalex_tools,
     create_python_tool,
     create_shell_tool,
     create_tavily_tool,
@@ -57,7 +59,7 @@ class WorkspaceAgentConfig:
     system_prompt: str | None = None
 
 
-_TOOL_SENTINEL = "Available tools: shell, python, tavily, document, neo4j, knowledge."
+_TOOL_SENTINEL = "Available tools: shell, python, tavily, crossref, openalex_work, openalex_cited_by, document, neo4j, knowledge."
 
 DEFAULT_SYSTEM_PROMPT = f"""You are the TianGong Workspace orchestrator.
 - Plan multi-step solutions and choose the best tool for each step.
@@ -79,6 +81,8 @@ def build_workspace_deep_agent(
     include_dify_knowledge: bool = True,
     include_document_agent: bool = True,
     include_neo4j: bool = True,
+    include_crossref: bool = True,
+    include_openalex: bool = True,
     system_prompt: str | None = None,
     max_iterations: int = 8,
     engine: str = "langgraph",
@@ -94,7 +98,7 @@ def build_workspace_deep_agent(
     llm:
         Optional runnable to override the planning model (primarily for testing).
     include_*:
-        Flags to toggle the availability of individual tools.
+        Flags to toggle the availability of individual tools (shell, python, tavily, crossref, openalex, knowledge, document, neo4j).
     system_prompt:
         Custom system instructions appended to the default planner guidance.
     max_iterations:
@@ -111,6 +115,8 @@ def build_workspace_deep_agent(
         include_document_agent=include_document_agent,
         include_dify_knowledge=include_dify_knowledge,
         include_neo4j=include_neo4j,
+        include_crossref=include_crossref,
+        include_openalex=include_openalex,
     )
 
     engine_choice = engine.lower().strip()
@@ -135,6 +141,8 @@ def _initialise_tools(
     include_document_agent: bool,
     include_dify_knowledge: bool,
     include_neo4j: bool,
+    include_crossref: bool,
+    include_openalex: bool,
 ) -> Mapping[str, Any]:
     tool_mapping: MutableMapping[str, Any] = {}
 
@@ -161,6 +169,12 @@ def _initialise_tools(
             tool_mapping["neo4j"] = create_neo4j_tool()
         except Neo4jToolError:
             pass
+    if include_crossref:
+        tool_mapping["crossref"] = create_crossref_tool()
+    if include_openalex:
+        work_tool, cited_by_tool = create_openalex_tools()
+        tool_mapping["openalex_work"] = work_tool
+        tool_mapping["openalex_cited_by"] = cited_by_tool
 
     return tool_mapping
 
