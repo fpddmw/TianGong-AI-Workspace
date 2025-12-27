@@ -50,6 +50,8 @@ class SupabaseClient:
         config = loaded.supabase
         if config is None:
             raise SupabaseClientError("Supabase secrets are not configured.")
+        if not (config.sci_search_url and config.x_api_key):
+            raise SupabaseClientError("Supabase secrets must include `sci_search_url` and `x_api_key`.")
         object.__setattr__(self, "secrets", loaded)
         object.__setattr__(self, "_config", config)
 
@@ -65,11 +67,11 @@ class SupabaseClient:
         }
         headers = {
             "Content-Type": "application/json",
-            "x-api-key": self._config.token,
             "x-region": "us-east-1",
+            "x-api-key": self._config.x_api_key,
         }
         try:
-            response = self._post(self._config.api_url, json=payload, headers=headers)
+            response = self._post(self._build_endpoint(), json=payload, headers=headers)
             response.raise_for_status()
         except httpx.HTTPError as exc:
             raise SupabaseClientError(f"Supabase request failed: {exc}") from exc
@@ -78,6 +80,12 @@ class SupabaseClient:
             return response.json()
         except ValueError as exc:  # pragma: no cover - defensive
             raise SupabaseClientError("Supabase returned invalid JSON.") from exc
+
+    def _build_endpoint(self) -> str:
+        """Ensure we always hit the sci_search edge function."""
+
+        base = (self._config.sci_search_url or "").rstrip("/")
+        return base or ""
 
     def _post(self, url: str, *, json: Mapping[str, Any], headers: Mapping[str, str]) -> httpx.Response:
         if self.http_client is not None:

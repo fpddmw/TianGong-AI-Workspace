@@ -111,8 +111,8 @@ class MineruSecrets:
 class SupabaseSecrets:
     """Configuration for Supabase edge function used for sci_search."""
 
-    api_url: str
-    token: str
+    sci_search_url: str
+    x_api_key: str
 
 
 @dataclass(slots=True)
@@ -229,10 +229,10 @@ def load_secrets(path: Optional[Path] = None) -> Secrets:
     supabase_data = data.get("supabase")
     supabase_secrets = None
     if isinstance(supabase_data, Mapping):
-        api_url = _get_opt_str(supabase_data, "api_url")
-        token = _get_opt_str(supabase_data, "token")
-        if api_url and token:
-            supabase_secrets = SupabaseSecrets(api_url=api_url, token=token)
+        sci_search_url = _get_opt_str(supabase_data, "sci_search_url")
+        x_api_key = _get_opt_str(supabase_data, "x_api_key")
+        if sci_search_url and x_api_key:
+            supabase_secrets = SupabaseSecrets(sci_search_url=sci_search_url, x_api_key=x_api_key)
 
     return Secrets(
         openai=openai_secrets,
