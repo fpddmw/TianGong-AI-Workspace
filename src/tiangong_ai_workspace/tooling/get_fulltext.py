@@ -53,15 +53,15 @@ class SupabaseClient:
         object.__setattr__(self, "secrets", loaded)
         object.__setattr__(self, "_config", config)
 
-    def fetch_content(self, doi: str, query: str, *, top_k: int = 5, est_k: int = 50) -> Mapping[str, Any]:
+    def fetch_content(self, doi: str, query: str, *, top_k: int = 5, ext_k: int = 50) -> Mapping[str, Any]:
         if not doi.strip():
             raise SupabaseClientError("DOI cannot be empty.")
         normalized_doi = _normalize_doi(doi)
         payload = {
-            "query": query,
+            "query": 'Introduction, Results, Discussions, Conclusions',
             "filter": {"doi": [normalized_doi]},
             "topK": top_k,
-            "estK": est_k,
+            "extK": ext_k,
         }
         headers = {
             "Content-Type": "application/json",
