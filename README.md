@@ -11,7 +11,7 @@
 - `install_*.sh` / `install_windows.ps1`: one-click installers.
 - `src/tiangong_ai_workspace/`: workspace Python package and CLI entrypoint.
   - `cli.py`: Typer CLI with `docs`, `agents`, `gemini`, `research`, `knowledge`, `embeddings`、`citation-study`, `crossref`, `openalex`, and `mcp` subcommands.
-  - `agents/`: LangGraph document workflows (`workflows.py`), dual-engine autonomous agents for LangGraph/DeepAgents (`deep_agent.py`), and LangChain Tools with Pydantic input/output validation (`tools.py`).
+  - `agents/`: LangGraph document workflows (`workflows.py`), dual-engine autonomous agents for LangGraph/DeepAgents (`deep_agent.py`), citation/journal-band helpers shared by CLI + agents (`citation_agent.py`), and LangChain Tools with Pydantic input/output validation (`tools.py`).
   - `tooling/`: response envelope, workspace config loader (`config.py`), tool registry, model router (`llm.py`), shared tool schemas (`tool_schemas.py`), Tavily MCP client, Gemini Deep Research Interactions API client (`gemini.py`)、OpenAlex 引用潜力与类型识别客户端 (`openalex.py`), Crossref Works API client (`crossref.py`), OpenAlex Works/Cited-by client (`openalex.py`), Dify knowledge-base client (`dify.py`), Neo4j client (`neo4j.py`), and audited Shell/Python executors.
   - `templates/`: structural prompts for different document types.
   - `mcp_client.py`: synchronous MCP client wrapper.

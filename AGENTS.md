@@ -10,6 +10,7 @@
 - `src/tiangong_ai_workspace/agents/`:
   - `workflows.py`: LangChain/LangGraph document workflows (reports, plans, patent, proposals).
   - `deep_agent.py`: Workspace autonomous agent supporting both native LangGraph loops and the `deepagents` runtime.
+  - `citation_agent.py`: Shared citation-analysis helpers (OpenAlex/Supabase/PDF + Mineru) reused by the CLI and agents for `citation-study`/`journal-bands` flows.
   - `tools.py`: LangChain Tool wrappers for shell/Python execution, Tavily search, Crossref journal lookups, OpenAlex works/cited-by, Neo4j CRUD, and document generation (with typed Pydantic schemas).
 - `src/tiangong_ai_workspace/tooling/`: Utilities shared by agents.
   - `responses.py`: `WorkspaceResponse` envelope for deterministic outputs.
