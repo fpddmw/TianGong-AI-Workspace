@@ -15,7 +15,7 @@ from .neo4j import Neo4jClient
 from .openalex import OpenAlexClient
 from .registry import ToolDescriptor, list_registered_tools
 from .responses import ResponsePayload, WorkspaceResponse
-from .supabase import SupabaseClient
+from .get_fulltext import SupabaseClient
 
 __all__ = [
     "CrossrefClient",

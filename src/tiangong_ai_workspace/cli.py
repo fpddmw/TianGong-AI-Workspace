@@ -22,13 +22,12 @@ from . import __version__
 from .agents import DocumentWorkflowConfig, DocumentWorkflowType, run_document_workflow
 from .agents.citation_agent import (
     CitationStudyConfig,
-    JournalBandsConfig,
     CitationTextReportConfig,
-    make_work_slug,
     generate_citation_text_report,
+    make_work_slug,
     run_citation_study,
-    run_journal_bands_analysis,
 )
+from .agents.journal_bands_agent import JournalBandsAgent, JournalBandsConfig
 from .agents.deep_agent import build_workspace_deep_agent
 from .mcp_client import MCPToolClient
 from .secrets import MCPServerSecrets, discover_secrets_path, load_secrets
@@ -41,7 +40,7 @@ from .tooling.gemini import GeminiDeepResearchClient, GeminiDeepResearchError
 from .tooling.llm import ModelPurpose
 from .tooling.openalex import OpenAlexClient, OpenAlexClientError
 from .tooling.mineru import MineruClient, MineruClientError
-from .tooling.supabase import SupabaseClientError
+from .tooling.get_fulltext import SupabaseClientError
 from .tooling.tavily import TavilySearchClient, TavilySearchError
 
 app = typer.Typer(help="Tiangong AI Workspace CLI for managing local AI tooling.")
@@ -679,7 +678,7 @@ def citation_study(
         show_default=True,
     ),
     supabase_top_k: int = typer.Option(10, "--supabase-top-k", help="Supabase sci_search topK for fulltext retrieval."),
-    supabase_est_k: int = typer.Option(80, "--supabase-est-k", help="Supabase sci_search estK for fulltext retrieval."),
+    supabase_ext_k: int = typer.Option(80, "--supabase-est-k", help="Supabase sci_search estK for fulltext retrieval."),
     model: Optional[str] = typer.Option(
         None,
         "--model",
@@ -724,7 +723,7 @@ def citation_study(
         pdf_dir=pdf_dir,
         mode=mode,
         supabase_top_k=supabase_top_k,
-        supabase_est_k=supabase_est_k,
+        supabase_ext_k=supabase_ext_k,
         temperature=temperature,
         pdf=pdf,
         use_mineru=use_mineru,
@@ -830,9 +829,8 @@ def journal_bands_analyze(
     )
 
     try:
-        result_path = run_journal_bands_analysis(
-            config, log=lambda msg: typer.echo(f"[journal-bands] {msg}")
-        )
+        agent = JournalBandsAgent()
+        result_path = agent.run(config, log=lambda msg: typer.echo(f"[journal-bands] {msg}"))
     except SupabaseClientError as exc:
         typer.secho(f"Supabase 获取全文失败: {exc}", fg=typer.colors.RED)
         raise typer.Exit(code=1) from exc

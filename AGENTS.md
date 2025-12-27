@@ -10,7 +10,8 @@
 - `src/tiangong_ai_workspace/agents/`:
   - `workflows.py`: LangChain/LangGraph document workflows (reports, plans, patent, proposals).
   - `deep_agent.py`: Workspace autonomous agent supporting both native LangGraph loops and the `deepagents` runtime.
-  - `citation_agent.py`: Shared citation-analysis helpers (OpenAlex/Supabase/PDF + Mineru) reused by the CLI and agents for `citation-study`/`journal-bands` flows.
+  - `citation_agent.py`: Shared citation-analysis helpers (OpenAlex/Supabase/PDF + Mineru) reused by the CLI and agents for `citation-study` flows.
+  - `journal_bands_agent.py`: Dedicated agent for sampling journal citation bands and running Supabase+LLM analysis.
   - `tools.py`: LangChain Tool wrappers for shell/Python execution, Tavily search, Crossref journal lookups, OpenAlex works/cited-by, Neo4j CRUD, and document generation (with typed Pydantic schemas).
 - `src/tiangong_ai_workspace/tooling/`: Utilities shared by agents.
   - `responses.py`: `WorkspaceResponse` envelope for deterministic outputs.
@@ -70,7 +71,7 @@ All three must pass before sharing updates.
 - `uv run tiangong-workspace knowledge retrieve "<query>"` — call the Dify knowledge base API without MCP；可用 `--search-method`、`--reranking/--no-reranking`、`--reranking-provider/--reranking-model`、`--score-threshold`、`--semantic-weight` 与 `--metadata` 快速配置 Dify `retrieval_model` 与元数据过滤。
 - `uv run tiangong-workspace embeddings generate "<text>"` — 调用 OpenAI 兼容 embedding 服务，支持批量文本、`--model/--json`。
 - `uv run tiangong-workspace openalex-fetch "topic" --limit 20 --download-dir ./papers` — 预取 OpenAlex 元数据并尝试下载 PDF。
-- `uv run tiangong-workspace journal-bands-analyze --issn <issn> --journal "<name>"` — Supabase 取样全文后用 OpenAI `response_format`(`json_schema`) 严格输出五维度特征分析，默认每档位随机抽样 10% 并发处理（≤10 线程），会自动过滤无 DOI 及标题包含 “Corrigendum to …”/“Editorial Board” 的记录。
+- `uv run tiangong-workspace journal-bands-analyze --issn <issn> --journal "<name>"` — 由独立的 journal-bands agent 负责：Supabase 取样全文后用 OpenAI `response_format`(`json_schema`) 严格输出五维度特征分析，默认每档位随机抽样 10% 并发处理（≤10 线程），会自动过滤无 DOI 及标题包含 “Corrigendum to …”/“Editorial Board” 的记录。
 - `uv run tiangong-workspace citation-study --mode supabase --doi 10.1234/abc --pdf-dir ./papers --use-mineru` — 两种模式：`supabase` 可直接用 `--doi` 拉取 OpenAlex 元数据后走 Supabase sci_search 获取全文（若开启 `--use-mineru` 必须提供 PDF 以拆解图表；也可继续使用 --works-file 批量处理）；`pdf` 直接读取本地 PDF 抽取全文。LLM 采用 RCR 核心规则库 + OpenAI `response_format` JSON schema 输出 High/Middle/Low 引文带、四维评分与行动建议，已取消启发式评分。
 - `uv run tiangong-workspace citation-report paper.txt --title "Draft"` — 直接用纯文本论文（图表已转成文字）按 `prompts/citation_prediction/score_criteria.md` 生成引文影响力报告，模板位于 `templates/citation_impact_report.md`。
 - `uv run tiangong-workspace mineru-with-images ./file.pdf --prompt "解析图表"` — 调用 Mineru PDF 图片解析 API，支持 MinIO 落盘与模型透传。
