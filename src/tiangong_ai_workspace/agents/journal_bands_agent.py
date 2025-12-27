@@ -61,8 +61,7 @@ class JournalBandsAgent:
             max_records=config.max_records,
         )
         _log(
-            f"Fetched bands: high={len(bands.high)}, middle={len(bands.middle)}, low={len(bands.low)} "
-            f"(p25={bands.thresholds.get('p25', 0):.1f}, p75={bands.thresholds.get('p75', 0):.1f})"
+            f"Fetched bands: high={len(bands.high)}, middle={len(bands.middle)}, low={len(bands.low)} " f"(p25={bands.thresholds.get('p25', 0):.1f}, p75={bands.thresholds.get('p75', 0):.1f})"
         )
 
         assert self.supabase is not None  # for type-checkers
@@ -82,12 +81,8 @@ class JournalBandsAgent:
         header_lines.append(f"# Journal analysis: {config.journal_name} (ISSN {config.journal_issn})")
         if config.publish_year:
             header_lines.append(f"- Publication year filter: {config.publish_year}")
-        header_lines.append(
-            f"- Band limit: {config.band_limit} (after percentile split), max records considered: {config.max_records}"
-        )
-        header_lines.append(
-            f"- Citation thresholds: p25={bands.thresholds.get('p25', 0):.1f}, p75={bands.thresholds.get('p75', 0):.1f}"
-        )
+        header_lines.append(f"- Band limit: {config.band_limit} (after percentile split), max records considered: {config.max_records}")
+        header_lines.append(f"- Citation thresholds: p25={bands.thresholds.get('p25', 0):.1f}, p75={bands.thresholds.get('p75', 0):.1f}")
         header_lines.append(f"- Supabase sci_search: topK={config.top_k}, extK={config.ext_k}")
         header_lines.append("")
         output_path.write_text("\n".join(header_lines) + "\n", encoding="utf-8")
@@ -97,9 +92,7 @@ class JournalBandsAgent:
             if not works:
                 continue
             sampled_works = self._sample_band(works)
-            _log(
-                f"Processing {len(sampled_works)} sampled papers (source pool: {len(works)}) in {section_title}..."
-            )
+            _log(f"Processing {len(sampled_works)} sampled papers (source pool: {len(works)}) in {section_title}...")
 
             tasks = list(enumerate(sampled_works, start=1))
             with ThreadPoolExecutor(max_workers=self.max_workers) as executor:

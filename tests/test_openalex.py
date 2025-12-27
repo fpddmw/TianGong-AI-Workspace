@@ -33,6 +33,7 @@ def test_search_works_parses_results(monkeypatch: pytest.MonkeyPatch) -> None:
     results = client.search_works("ai", since_year=2020, per_page=5)
     assert results[0]["id"] == "W1"
 
+
 def test_llm_assessor_parses_json(monkeypatch: pytest.MonkeyPatch) -> None:
     work = {
         "title": "LLM paper",

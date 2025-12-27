@@ -23,13 +23,12 @@ from .agents import DocumentWorkflowConfig, DocumentWorkflowType, run_document_w
 from .agents.citation_agent import (
     CitationStudyConfig,
     CitationTextReportConfig,
-    JournalBandsConfig,
     generate_citation_text_report,
     make_work_slug,
     run_citation_study,
-    run_journal_bands_analysis,
 )
 from .agents.deep_agent import build_workspace_deep_agent
+from .agents.journal_bands_agent import JournalBandsConfig, run_journal_bands_agent
 from .mcp_client import MCPToolClient
 from .secrets import MCPServerSecrets, discover_secrets_path, load_secrets
 from .tooling import WorkspaceResponse, list_registered_tools
@@ -643,7 +642,7 @@ def openalex_fetch(
                 typer.echo(f"- {err}")
 
 
-# --------------------------------------------------------------------------- Citation study (OpenAlex)
+# --------------------------------------------------------------------------- Citation study
 
 
 @app.command("citation-study")
@@ -656,12 +655,12 @@ def citation_study(
         dir_okay=False,
         readable=True,
         resolve_path=True,
-        help="Optional JSON file containing pre-fetched works metadata (from openalex-fetch or custom source).",
+        help="Optional JSON file containing works metadata (from another pipeline or custom source).",
     ),
     doi: list[str] = typer.Option(
         [],
         "--doi",
-        help="One or more DOIs; when provided, OpenAlex 元数据会自动拉取，无需先运行 openalex-fetch。",
+        help="One or more DOIs to score via Supabase (and optionally local PDFs).",
     ),
     pdf_dir: Optional[Path] = typer.Option(
         None,
@@ -741,7 +740,7 @@ def citation_study(
         response = WorkspaceResponse.error(str(exc), source="citation-study")
         _emit_response(response, json_output)
         raise typer.Exit(code=2) from exc
-    except (OpenAlexClientError, SupabaseClientError, MineruClientError) as exc:
+    except (SupabaseClientError, MineruClientError) as exc:
         response = WorkspaceResponse.error("Citation study failed.", errors=(str(exc),), source="citation-study")
         _emit_response(response, json_output)
         raise typer.Exit(code=2) from exc
@@ -829,7 +828,7 @@ def journal_bands_analyze(
     )
 
     try:
-        result_path = run_journal_bands_analysis(config, log=lambda msg: typer.echo(f"[journal-bands] {msg}"))
+        result_path = run_journal_bands_agent(config, log=lambda msg: typer.echo(f"[journal-bands] {msg}"))
     except SupabaseClientError as exc:
         typer.secho(f"Supabase 获取全文失败: {exc}", fg=typer.colors.RED)
         raise typer.Exit(code=1) from exc

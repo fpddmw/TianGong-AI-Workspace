@@ -60,7 +60,7 @@ class SupabaseClient:
             raise SupabaseClientError("DOI cannot be empty.")
         normalized_doi = _normalize_doi(doi)
         payload = {
-            "query": 'Introduction, Results, Discussions, Conclusions',
+            "query": "Introduction, Results, Discussions, Conclusions",
             "filter": {"doi": [normalized_doi]},
             "topK": top_k,
             "extK": ext_k,

@@ -6,23 +6,19 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Mapping, MutableMapping, Optional, Sequence
+from typing import Any, Mapping, MutableMapping, Optional, Sequence
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from ..tooling.get_fulltext import SupabaseClient, SupabaseClientError
-from ..tooling.highly_cited import fetch_journal_citation_bands
 from ..tooling.llm import ModelRouter
 from ..tooling.mineru import MineruClient
-from ..tooling.openalex import OpenAlexClientError
 
 __all__ = [
     "CitationStudyConfig",
     "FullTextResult",
-    "JournalBandsConfig",
     "CitationTextReportConfig",
     "run_citation_study",
-    "run_journal_bands_analysis",
     "generate_citation_text_report",
     "load_works_file",
     "make_work_slug",
@@ -68,19 +64,6 @@ class FullTextResult:
 
 
 @dataclass(slots=True)
-class JournalBandsConfig:
-    journal_issn: str
-    journal_name: str
-    publish_year: Optional[int] = None
-    band_limit: int = 200
-    max_records: int = 800
-    top_k: int = 10
-    est_k: int = 80
-    show_fulltext: bool = False
-    output: Path = Path("journal_bands_summary.md")
-
-
-@dataclass(slots=True)
 class CitationTextReportConfig:
     """Plain-text citation impact report configuration."""
 
@@ -119,43 +102,6 @@ def run_citation_study(config: CitationStudyConfig) -> Mapping[str, Any]:
         "works": results,
         "count": len(results),
     }
-
-
-def run_journal_bands_analysis(config: JournalBandsConfig, log: Optional[Callable[[str], None]] = None) -> Path:
-    """Lightweight journal band helper; keeps existing CLI contract."""
-
-    logger = log or (lambda msg: None)
-    logger("Fetching journal citation bands from OpenAlex ...")
-    bands = fetch_journal_citation_bands(
-        journal_issn=config.journal_issn,
-        journal_name=config.journal_name,
-        publish_year=config.publish_year,
-        band_limit=config.band_limit,
-        max_records=config.max_records,
-    )
-
-    lines: list[str] = []
-    lines.append(f"# Citation bands for {config.journal_name} ({config.journal_issn})")
-    lines.append(f"- Records fetched: {len(bands.high) + len(bands.middle) + len(bands.low)}")
-    lines.append(f"- Thresholds: p25={bands.thresholds.get('p25', 0):.2f}, p75={bands.thresholds.get('p75', 0):.2f}")
-    lines.append("")
-
-    def _append_band(name: str, items: list[Mapping[str, Any]]) -> None:
-        lines.append(f"## {name} ({len(items)})")
-        for band_idx, work in enumerate(items, start=1):
-            title = work.get("title") or "(untitled)"
-            doi = work.get("doi") or "n/a"
-            cites = work.get("cited_by_count") or 0
-            lines.append(f"{band_idx}. {title} — {doi} (cited_by_count={cites})")
-        lines.append("")
-
-    _append_band("High", bands.high)
-    _append_band("Middle", bands.middle)
-    _append_band("Low", bands.low)
-
-    config.output.write_text("\n".join(lines), encoding="utf-8")
-    logger(f"Summary written to {config.output}")
-    return config.output
 
 
 def generate_citation_text_report(config: CitationTextReportConfig) -> Mapping[str, Any]:
@@ -247,15 +193,15 @@ def stringify_supabase_result(result: Mapping[str, Any], max_chars: int) -> str:
 
 def extract_pdf_text(pdf_path: Path, max_chars: int = 12000) -> str:
     if not pdf_path.exists():
-        raise OpenAlexClientError(f"PDF not found: {pdf_path}")
+        raise ValueError(f"PDF not found: {pdf_path}")
     try:
         from pypdf import PdfReader
     except Exception as exc:  # pragma: no cover - defensive
-        raise OpenAlexClientError(f"Failed to read PDF {pdf_path}: {exc}") from exc
+        raise ValueError(f"Failed to read PDF {pdf_path}: {exc}") from exc
     try:
         reader = PdfReader(str(pdf_path))
     except Exception as exc:  # pragma: no cover - defensive
-        raise OpenAlexClientError(f"Failed to read PDF {pdf_path}: {exc}") from exc
+        raise ValueError(f"Failed to read PDF {pdf_path}: {exc}") from exc
 
     snippets: list[str] = []
     for page in reader.pages:
@@ -270,12 +216,12 @@ def extract_pdf_text(pdf_path: Path, max_chars: int = 12000) -> str:
             break
     combined = "\n".join(snippets).strip()
     if not combined:
-        raise OpenAlexClientError(f"未能从 PDF 提取文本: {pdf_path}")
+        raise ValueError(f"未能从 PDF 提取文本: {pdf_path}")
     return trim_text(combined, max_chars) or ""
 
 
 def find_pdf_for_work(work: Mapping[str, Any], pdf_dir: Path) -> Optional[Path]:
-    """Match a PDF in pdf_dir by DOI, OpenAlex ID, or title."""
+    """Match a PDF in pdf_dir by DOI, work ID, or title."""
 
     def _candidate_slugs(value: str) -> list[str]:
         variants = {value}
