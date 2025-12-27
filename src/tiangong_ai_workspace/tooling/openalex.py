@@ -141,6 +141,75 @@ class OpenAlexClient:
             raise OpenAlexClientError(f"No OpenAlex record found for DOI '{doi}'.")
         return results[0]
 
+    def work_by_doi(self, doi: str, *, mailto: Optional[str] = None) -> Mapping[str, Any]:
+        """Fetch a work by DOI using the direct /works/{doi} endpoint."""
+
+        if not doi.strip():
+            raise OpenAlexClientError("DOI cannot be empty.")
+
+        params: MutableMapping[str, Any] = {}
+        if mailto:
+            params["mailto"] = mailto
+
+        url = f"{self.base_url}/works/{doi}"
+        try:
+            response = self._get(url, params=params)
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise OpenAlexClientError(f"OpenAlex request failed: {exc}") from exc
+
+        try:
+            payload = response.json()
+        except ValueError as exc:  # pragma: no cover - defensive fallback
+            raise OpenAlexClientError("OpenAlex returned invalid JSON.") from exc
+
+        return {"result": payload}
+
+    def cited_by(
+        self,
+        work_id: str,
+        *,
+        from_publication_date: Optional[str] = None,
+        to_publication_date: Optional[str] = None,
+        per_page: int = 200,
+        cursor: str = "*",
+        mailto: Optional[str] = None,
+    ) -> Mapping[str, Any]:
+        """List works citing the target work."""
+
+        if not work_id.strip():
+            raise OpenAlexClientError("Work ID cannot be empty.")
+
+        filters = [f"cites:{work_id}"]
+        if from_publication_date:
+            filters.append(f"from_publication_date:{from_publication_date}")
+        if to_publication_date:
+            filters.append(f"to_publication_date:{to_publication_date}")
+
+        params: MutableMapping[str, Any] = {
+            "filter": ",".join(filters),
+            "per-page": per_page,
+            "cursor": cursor,
+        }
+        if mailto:
+            params["mailto"] = mailto
+
+        url = f"{self.base_url}/works"
+        try:
+            response = self._get(url, params=params)
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise OpenAlexClientError(f"OpenAlex request failed: {exc}") from exc
+
+        try:
+            payload = response.json()
+        except ValueError as exc:  # pragma: no cover - defensive fallback
+            raise OpenAlexClientError("OpenAlex returned invalid JSON.") from exc
+
+        results = payload.get("results") or []
+        total = payload.get("meta", {}).get("count") if isinstance(payload.get("meta"), Mapping) else None
+        return {"results": results, "total_count": int(total or 0)}
+
     def extract_doi_from_pdf(self, pdf_path: Path) -> str:
         """Heuristically extract a DOI from a PDF's text."""
 
@@ -200,19 +269,27 @@ class LLMCitationAssessor:
             (
                 "请基于以下四个深度维度对用户提供的稿件信息进行评估：\n"
                 "1. 选题的系统性与全球视野\n"
-                "1.1跨领域耦合性：顶尖研究不再孤立地讨论“资源回收”，而是将其嵌入宏观系统中。核心在于是否能将AI/机器学习、循环经济与能源转型、地缘政治、供应链安全、碳中和路径或ESG 风险等全球大议题进行深度耦合。\n"
-                "1.2尺度溢价：评估研究是否具备“尺度跨越”能力。相比于单一工厂或特定城市的个案研究，具备全球视角（Global）、国家尺度（National）或跨区域流动分析的研究具有更高的学术价值。\n"
-                "1.3普适性范式：如果研究涉及特定地区，需审查其是否提炼出了可迁移的方法论框架。若仅停留于“本地现状描述”而无理论外延，其学术影响力将严重受限。\n"
+                "1.1跨领域耦合性：顶尖研究不再孤立地讨论“资源回收”，而是将其嵌入宏观系统中。核心在于是否能将AI/机器学习、"
+                "循环经济与能源转型、地缘政治、供应链安全、碳中和路径或ESG 风险等全球大议题进行深度耦合。\n"
+                "1.2尺度溢价：评估研究是否具备“尺度跨越”能力。相比于单一工厂或特定城市的个案研究，具备全球视角（Global）、"
+                "国家尺度（National）或跨区域流动分析的研究具有更高的学术价值。\n"
+                "1.3普适性范式：如果研究涉及特定地区，需审查其是否提炼出了可迁移的方法论框架。若仅停留于“本地现状描述”而无理论外延，"
+                "其学术影响力将严重受限。\n"
                 "2. 方法论的集成深度与逻辑闭环\n"
-                "2.1全生命周期闭环：在资源利用研究中，优秀的论文应构建“机理探索—性能验证—环境影响（LCA）—经济可行性（LCC）”的闭环。缺乏环境效益或经济可行性对冲的技术研究往往显得单薄。\n"
-                "2.2计算与算法壁垒：若涉及数据建模或机器学习，需达到极高的工业严谨度。包括但不限于：多算法的横向对比验证、模型的可解释性分析（如 SHAP 值）、以及针对类不平衡或噪声数据的特殊鲁棒性处理。\n"
-                "2.3量化模拟深度：对于政策类文章，应超越纯定性的文本梳理。通过系统动力学（SD）、情景模拟或多代理模型（ABM）进行的量化预测，是区分普通综述与顶级研究的关键。\n"
+                "2.1全生命周期闭环：在资源利用研究中，优秀的论文应构建“机理探索—性能验证—环境影响（LCA）—经济可行性（LCC）”的闭环。"
+                "缺乏环境效益或经济可行性对冲的技术研究往往显得单薄。\n"
+                "2.2计算与算法壁垒：若涉及数据建模或机器学习，需达到极高的工业严谨度。包括但不限于：多算法的横向对比验证、模型的可解释性分析"
+                "（如 SHAP 值）、以及针对类不平衡或噪声数据的特殊鲁棒性处理。\n"
+                "2.3量化模拟深度：对于政策类文章，应超越纯定性的文本梳理。通过系统动力学（SD）、情景模拟或多代理模型（ABM）进行的量化预测，"
+                "是区分普通综述与顶级研究的关键。\n"
                 "3. 数据效力与可视化表达\n"
-                "3.1数据权威性与规模：优先评估是否使用了权威的一阶/二阶数据源（如 S&P Global, IEA, UN Comtrade 等）。数据量级应能支撑起时间维度的趋势预测或空间维度的分布推演。\n"
+                "3.1数据权威性与规模：优先评估是否使用了权威的一阶/二阶数据源（如 S&P Global, IEA, UN Comtrade 等）。"
+                "数据量级应能支撑起时间维度的趋势预测或空间维度的分布推演。\n"
                 "3.2时效性红线：环境政策与技术发展日新月异，数据来源若滞后于当前时间点 3 年以上，通常会被认为缺乏现实指导意义。\n"
                 "3.3专业可视化标准：高水平论文通常配有极具信息密度的可视化图表，如：展示物质流流向的桑基图、揭示地理分布的热力图以及展示变量间因果关联的结构方程模型图。\n"
                 "4. 决策支持与行动导向\n"
-                "4.1政策锚定精准度：结论是否直接回应了具体的国际协议、政府规划或行业标准。拒绝空洞的建议，优秀的论文应给出具体的参数（如：建议某项税收上调多少百分比能实现最佳回收率）。\n"
+                "4.1政策锚定精准度：结论是否直接回应了具体的国际协议、政府规划或行业标准。拒绝空洞的建议，优秀的论文应给出具体的参数"
+                "（如：建议某项税收上调多少百分比能实现最佳回收率）。\n"
                 "4.2管理启示的深度：评估文章是否为决策者（政府或企业管理层）提供了具有“干预价值”的洞察，而非单纯的学术发现总结。"
             ),
             (

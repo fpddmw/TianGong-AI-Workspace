@@ -9,13 +9,13 @@ from .crossref import CrossrefClient
 from .dify import DifyKnowledgeBaseClient
 from .embeddings import OpenAICompatibleEmbeddingClient
 from .executors import PythonExecutor, ShellExecutor
-from .mineru import MineruClient
 from .gemini import GeminiDeepResearchClient
+from .get_fulltext import SupabaseClient
+from .mineru import MineruClient
 from .neo4j import Neo4jClient
 from .openalex import OpenAlexClient
 from .registry import ToolDescriptor, list_registered_tools
 from .responses import ResponsePayload, WorkspaceResponse
-from .get_fulltext import SupabaseClient
 
 __all__ = [
     "CrossrefClient",

@@ -23,11 +23,12 @@ from .agents import DocumentWorkflowConfig, DocumentWorkflowType, run_document_w
 from .agents.citation_agent import (
     CitationStudyConfig,
     CitationTextReportConfig,
+    JournalBandsConfig,
     generate_citation_text_report,
     make_work_slug,
     run_citation_study,
+    run_journal_bands_analysis,
 )
-from .agents.journal_bands_agent import JournalBandsAgent, JournalBandsConfig
 from .agents.deep_agent import build_workspace_deep_agent
 from .mcp_client import MCPToolClient
 from .secrets import MCPServerSecrets, discover_secrets_path, load_secrets
@@ -37,10 +38,10 @@ from .tooling.crossref import CrossrefClient, CrossrefClientError
 from .tooling.dify import DifyKnowledgeBaseClient, DifyKnowledgeBaseError
 from .tooling.embeddings import OpenAICompatibleEmbeddingClient, OpenAIEmbeddingError
 from .tooling.gemini import GeminiDeepResearchClient, GeminiDeepResearchError
-from .tooling.llm import ModelPurpose
-from .tooling.openalex import OpenAlexClient, OpenAlexClientError
-from .tooling.mineru import MineruClient, MineruClientError
 from .tooling.get_fulltext import SupabaseClientError
+from .tooling.llm import ModelPurpose
+from .tooling.mineru import MineruClient, MineruClientError
+from .tooling.openalex import OpenAlexClient, OpenAlexClientError
 from .tooling.tavily import TavilySearchClient, TavilySearchError
 
 app = typer.Typer(help="Tiangong AI Workspace CLI for managing local AI tooling.")
@@ -715,7 +716,7 @@ def citation_study(
     ),
     json_output: bool = typer.Option(False, "--json", help="Emit a machine-readable JSON response."),
 ) -> None:
-    """Fetch recent papers from OpenAlex and classify citation potential (high/medium/low)."""
+    """Fetch fulltext (Supabase or PDF) and generate a rubric-based citation report."""
 
     config = CitationStudyConfig(
         works_file=works_file,
@@ -745,18 +746,17 @@ def citation_study(
         _emit_response(response, json_output)
         raise typer.Exit(code=2) from exc
 
-    response = WorkspaceResponse.ok(payload=payload, message="Citation potential analysis completed.", source="citation-study")
+    response = WorkspaceResponse.ok(payload=payload, message="Citation analysis completed.", source="citation-study")
     _emit_response(response, json_output)
 
     if not json_output:
         typer.echo("")
         for item in payload.get("works", []):
             title = item.get("title") or "(untitled)"
-            band = (item.get("prediction") or {}).get("estimated_band") or "n/a"
             source_mode = item.get("fulltext_mode") or "n/a"
-        typer.echo(f"[{band}] {title} ({item.get('publication_year') or 'n/a'}) — cites: {item.get('cited_by_count')}, mode: {source_mode}")
+            typer.echo(f"- [{source_mode}] {title}")
         typer.echo("")
-        typer.echo("Use --json for structured results including dimension scores, action plans, and RCR match index.")
+        typer.echo("Use --json to view structured scores and full reports.")
 
 
 # --------------------------------------------------------------------------- Citation impact report (plain text)
@@ -829,8 +829,7 @@ def journal_bands_analyze(
     )
 
     try:
-        agent = JournalBandsAgent()
-        result_path = agent.run(config, log=lambda msg: typer.echo(f"[journal-bands] {msg}"))
+        result_path = run_journal_bands_analysis(config, log=lambda msg: typer.echo(f"[journal-bands] {msg}"))
     except SupabaseClientError as exc:
         typer.secho(f"Supabase 获取全文失败: {exc}", fg=typer.colors.RED)
         raise typer.Exit(code=1) from exc
