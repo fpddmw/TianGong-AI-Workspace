@@ -678,7 +678,7 @@ def citation_study(
         show_default=True,
     ),
     supabase_top_k: int = typer.Option(10, "--supabase-top-k", help="Supabase sci_search topK for fulltext retrieval."),
-    supabase_ext_k: int = typer.Option(80, "--supabase-est-k", help="Supabase sci_search estK for fulltext retrieval."),
+    supabase_ext_k: int = typer.Option(80, "--supabase-ext-k", help="Supabase sci_search extK for fulltext retrieval."),
     model: Optional[str] = typer.Option(
         None,
         "--model",
@@ -802,7 +802,7 @@ def journal_bands_analyze(
     band_limit: int = typer.Option(200, "--band-limit", min=10, max=400, help="Max papers to include per band after percentile split."),
     max_records: int = typer.Option(800, "--max-records", min=50, max=2000, help="Maximum records to fetch from OpenAlex."),
     top_k: int = typer.Option(10, "--top-k", help="Supabase sci_search topK for fulltext retrieval."),
-    est_k: int = typer.Option(80, "--est-k", help="Supabase sci_search estK for fulltext retrieval."),
+    ext_k: int = typer.Option(80, "--ext-k", help="Supabase sci_search extK for fulltext retrieval."),
     show_fulltext: bool = typer.Option(False, "--show-fulltext", help="Include retrieved fulltext snippets in the output for debugging."),
     output: Path = typer.Option(
         Path("journal_bands_summary.md"),
@@ -823,7 +823,7 @@ def journal_bands_analyze(
         band_limit=band_limit,
         max_records=max_records,
         top_k=top_k,
-        est_k=est_k,
+        ext_k=ext_k,
         show_fulltext=show_fulltext,
         output=output,
     )

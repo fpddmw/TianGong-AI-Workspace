@@ -27,7 +27,7 @@ class JournalBandsConfig:
     band_limit: int = 200
     max_records: int = 800
     top_k: int = 10
-    est_k: int = 80
+    ext_k: int = 80
     show_fulltext: bool = False
     output: Path = Path("journal_bands_summary.md")
 
@@ -88,7 +88,7 @@ class JournalBandsAgent:
         header_lines.append(
             f"- Citation thresholds: p25={bands.thresholds.get('p25', 0):.1f}, p75={bands.thresholds.get('p75', 0):.1f}"
         )
-        header_lines.append(f"- Supabase sci_search: topK={config.top_k}, estK={config.est_k}")
+        header_lines.append(f"- Supabase sci_search: topK={config.top_k}, extK={config.ext_k}")
         header_lines.append("")
         output_path.write_text("\n".join(header_lines) + "\n", encoding="utf-8")
 
@@ -199,7 +199,7 @@ class JournalBandsAgent:
             fulltext = self.supabase.fetch_content(
                 str(doi or ""),
                 top_k=config.top_k,
-                ext_k=config.est_k,
+                ext_k=config.ext_k,
             )
         except SupabaseClientError as exc:
             rationale = f"Supabase 获取全文失败: {exc}"
