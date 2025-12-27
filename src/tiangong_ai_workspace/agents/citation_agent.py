@@ -22,6 +22,7 @@ __all__ = [
     "generate_citation_text_report",
     "load_works_file",
     "make_work_slug",
+    "doi_to_filename",
     "find_pdf_for_work",
     "extract_pdf_text",
     "stringify_supabase_result",
@@ -162,6 +163,19 @@ def make_work_slug(work: Mapping[str, Any], fallback: str) -> str:
     if isinstance(title, str) and title:
         return _slugify(title)
     return _slugify(fallback)
+
+
+def doi_to_filename(doi: str, *, suffix: str = ".md") -> str:
+    value = doi.strip()
+    value = re.sub(r"^https?://(dx\.)?doi\.org/", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"^doi:\\s*", "", value, flags=re.IGNORECASE)
+    value = value.strip().lower().replace("/", "_")
+    value = re.sub(r"[^a-z0-9._-]+", "_", value).strip("._-")
+    if not value:
+        value = "work"
+    if suffix and not suffix.startswith("."):
+        suffix = "." + suffix
+    return f"{value}{suffix or ''}"
 
 
 def trim_text(value: Optional[str], max_chars: int) -> Optional[str]:

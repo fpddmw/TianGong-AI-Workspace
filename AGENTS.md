@@ -72,7 +72,7 @@ All three must pass before sharing updates.
 - `uv run tiangong-workspace embeddings generate "<text>"` — 调用 OpenAI 兼容 embedding 服务，支持批量文本、`--model/--json`。
 - `uv run tiangong-workspace openalex-fetch "topic" --limit 20 --download-dir ./papers` — 预取 OpenAlex 元数据并尝试下载 PDF。
 - `uv run tiangong-workspace journal-bands-analyze --issn <issn> --journal "<name>"` — 按 OpenAlex 引用分位数拆分 High/Middle/Low 档并写入 Markdown 摘要（包含标题、DOI、引用数）。
-- `uv run tiangong-workspace citation-study --mode supabase --doi 10.1234/abc --pdf-dir ./papers --use-mineru` — 先用 DOI 调 Supabase sci_search 获取全文文本；若无 DOI 则从 `./input` 或 `--pdf/--pdf-dir` 里匹配 PDF，并可选 `--use-mineru` 调 Mineru 拆解后转为文本。全文按 `prompts/citation_prediction/score_criteria.md` 评分并渲染报告。
+- `uv run tiangong-workspace citation-study --mode supabase --doi 10.1234/abc --pdf-dir ./papers --use-mineru` — 先用 DOI 调 Supabase sci_search 获取全文文本；若无 DOI 则从 `./input` 或 `--pdf/--pdf-dir` 里匹配 PDF，并可选 `--use-mineru` 调 Mineru 拆解后转为文本。全文按 `prompts/citation_prediction/score_criteria.md` 评分并渲染报告；Markdown 默认写入 `output/citation/<doi>.md`（可用 `--output-dir` 覆盖）。
 - `uv run tiangong-workspace citation-report paper.txt --title "Draft"` — 直接用纯文本论文（图表已转成文字）按 `prompts/citation_prediction/score_criteria.md` 生成引文影响力报告，模板位于 `templates/citation_impact_report.md`。
 - `uv run tiangong-workspace mineru-with-images ./file.pdf --prompt "解析图表"` — 调用 Mineru PDF 图片解析 API，支持 MinIO 落盘与模型透传。
 - `uv run tiangong-workspace mcp services|tools|invoke` — inspect and call configured MCP services.

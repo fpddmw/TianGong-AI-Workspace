@@ -229,7 +229,7 @@ uv run tiangong-workspace citation-study \
 ```
 
 - 默认（不加 `--json`）会直接在终端输出渲染后的 Markdown 报告；加 `--json` 则输出结构化结果，便于串接后续 Agent/工具。
-- 输出：`structured`（按评分规范的 JSON）与 `report`（Markdown 渲染结果），外加 `fulltext_mode/fulltext_excerpt` 方便溯源。
+- 输出：`structured`（按评分规范的 JSON）与 `report`（Markdown 渲染结果），外加 `fulltext_mode/fulltext_excerpt` 方便溯源；Markdown 默认写入 `output/citation/<doi>.md`（可用 `--output-dir` 覆盖）。
 - `journal-bands-analyze` 则直接按 OpenAlex 引用分位数写出 High/Middle/Low 三档 Markdown 清单（含标题、DOI、引用数）。
 
 ## PDF 图片解析（Mineru）

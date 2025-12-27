@@ -23,6 +23,7 @@ from .agents import DocumentWorkflowConfig, DocumentWorkflowType, run_document_w
 from .agents.citation_agent import (
     CitationStudyConfig,
     CitationTextReportConfig,
+    doi_to_filename,
     generate_citation_text_report,
     make_work_slug,
     run_citation_study,
@@ -713,6 +714,15 @@ def citation_study(
         "--max-fulltext-chars",
         help="Cap the amount of fulltext (Supabase/PDF) sent to the LLM to avoid overly long prompts.",
     ),
+    output_dir: Path = typer.Option(
+        Path("output/citation"),
+        "--output-dir",
+        path_type=Path,
+        file_okay=False,
+        resolve_path=True,
+        help="Directory to write Markdown citation reports (one file per work).",
+        show_default=True,
+    ),
     json_output: bool = typer.Option(False, "--json", help="Emit a machine-readable JSON response."),
 ) -> None:
     """Fetch fulltext (Supabase or PDF) and generate a rubric-based citation report."""
@@ -745,11 +755,25 @@ def citation_study(
         _emit_response(response, json_output)
         raise typer.Exit(code=2) from exc
 
+    output_dir.mkdir(parents=True, exist_ok=True)
+    works = payload.get("works", []) if isinstance(payload, dict) else []
+    for idx, item in enumerate(works):
+        report_text = (item.get("report") or "").strip()
+        if not report_text:
+            continue
+        doi = item.get("doi")
+        if isinstance(doi, str) and doi.strip():
+            filename = doi_to_filename(doi, suffix=".md")
+        else:
+            filename = f"{make_work_slug(item, fallback=f'work-{idx + 1}')}.md"
+        report_path = output_dir / filename
+        report_path.write_text(report_text + "\n", encoding="utf-8")
+        item["report_path"] = str(report_path)
+
     response = WorkspaceResponse.ok(payload=payload, message="Citation analysis completed.", source="citation-study")
     _emit_response(response, json_output)
 
     if not json_output:
-        works = payload.get("works", []) if isinstance(payload, dict) else []
         if works:
             typer.echo("")
         for idx, item in enumerate(works):
