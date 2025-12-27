@@ -23,7 +23,9 @@ from .agents import DocumentWorkflowConfig, DocumentWorkflowType, run_document_w
 from .agents.citation_agent import (
     CitationStudyConfig,
     JournalBandsConfig,
+    CitationTextReportConfig,
     make_work_slug,
+    generate_citation_text_report,
     run_citation_study,
     run_journal_bands_analysis,
 )
@@ -753,9 +755,43 @@ def citation_study(
             title = item.get("title") or "(untitled)"
             band = (item.get("prediction") or {}).get("estimated_band") or "n/a"
             source_mode = item.get("fulltext_mode") or "n/a"
-            typer.echo(f"[{band}] {title} ({item.get('publication_year') or 'n/a'}) — cites: {item.get('cited_by_count')}, mode: {source_mode}")
+        typer.echo(f"[{band}] {title} ({item.get('publication_year') or 'n/a'}) — cites: {item.get('cited_by_count')}, mode: {source_mode}")
         typer.echo("")
         typer.echo("Use --json for structured results including dimension scores, action plans, and RCR match index.")
+
+
+# --------------------------------------------------------------------------- Citation impact report (plain text)
+@app.command("citation-report")
+def citation_report(
+    text_file: Path = typer.Argument(
+        ...,
+        path_type=Path,
+        exists=True,
+        dir_okay=False,
+        readable=True,
+        resolve_path=True,
+        help="Plain-text paper content (figures already textualised).",
+    ),
+    title: Optional[str] = typer.Option(None, "--title", help="Optional title override for the report header."),
+    temperature: float = typer.Option(0.3, "--temperature", help="Sampling temperature for the LLM."),
+    json_output: bool = typer.Option(False, "--json", help="Emit a machine-readable JSON response."),
+) -> None:
+    """Generate an impact assessment report from a plain-text paper using citation criteria."""
+
+    config = CitationTextReportConfig(text_path=text_file, title=title, temperature=temperature)
+    try:
+        payload = generate_citation_text_report(config)
+    except Exception as exc:
+        response = WorkspaceResponse.error("Citation report generation failed.", errors=(str(exc),), source="citation-report")
+        _emit_response(response, json_output)
+        raise typer.Exit(code=1) from exc
+
+    response = WorkspaceResponse.ok(payload=payload, message="Citation impact report generated.", source="citation-report")
+    _emit_response(response, json_output)
+
+    if not json_output:
+        typer.echo("")
+        typer.echo(payload.get("report", ""))
 
 
 # --------------------------------------------------------------------------- Journal bands

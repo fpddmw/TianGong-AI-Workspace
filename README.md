@@ -66,6 +66,7 @@ uv run tiangong-workspace crossref journal-works "1234-5678" --query "LLM"
 uv run tiangong-workspace openalex work "10.1016/S0921-3449(00)00060-4"
 uv run tiangong-workspace openalex cited-by "W2072484418" --from 2020-01-01 --to 2021-01-01
 uv run tiangong-workspace embeddings generate "example text"
+uv run tiangong-workspace citation-report paper.txt --title "My Draft"  # plain-text impact report using score criteria
 ```
 
 All commands support `--json` for structured output that other agents can consume.

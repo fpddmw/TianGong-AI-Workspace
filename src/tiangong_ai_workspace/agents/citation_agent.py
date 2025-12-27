@@ -22,8 +22,10 @@ from ..tooling.supabase import SupabaseClient, SupabaseClientError
 __all__ = [
     "CitationStudyConfig",
     "JournalBandsConfig",
+    "CitationTextReportConfig",
     "run_citation_study",
     "run_journal_bands_analysis",
+    "generate_citation_text_report",
     "load_works_file",
     "make_work_slug",
     "find_pdf_for_work",
@@ -31,6 +33,12 @@ __all__ = [
     "stringify_supabase_result",
     "trim_text",
 ]
+
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+PACKAGE_ROOT = Path(__file__).resolve().parents[1]
+SCORE_CRITERIA_PATH = PROJECT_ROOT / "prompts" / "citation_prediction" / "score_criteria.md"
+CITATION_TEMPLATE_PATH = PACKAGE_ROOT / "templates" / "citation_impact_report.md"
+MAX_REPORT_TEXT_CHARS = 50000
 
 
 @dataclass(slots=True)
@@ -63,6 +71,14 @@ class JournalBandsConfig:
     show_fulltext: bool = False
     output: Path = Path("journal_bands_summary.md")
 
+
+@dataclass(slots=True)
+class CitationTextReportConfig:
+    """Plain-text citation impact report configuration."""
+
+    text_path: Path
+    title: Optional[str] = None
+    temperature: float = 0.3
 
 def run_citation_study(config: CitationStudyConfig) -> Mapping[str, Any]:
     mode_normalized = config.mode.lower()
@@ -463,6 +479,90 @@ def run_journal_bands_analysis(config: JournalBandsConfig, *, log: Callable[[str
     return output_path
 
 
+def generate_citation_text_report(config: CitationTextReportConfig) -> Mapping[str, Any]:
+    if not config.text_path.exists():
+        raise ValueError(f"Text file not found: {config.text_path}")
+
+    try:
+        paper_text_raw = config.text_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ValueError(f"Failed to read text file {config.text_path}: {exc}") from exc
+
+    paper_text = trim_text(paper_text_raw, MAX_REPORT_TEXT_CHARS) or ""
+    if not paper_text.strip():
+        raise ValueError("Paper text is empty.")
+
+    criteria_text = _load_score_criteria()
+    router = ModelRouter()
+    chat_model = router.create_chat_model(purpose="general", temperature=config.temperature)
+
+    schema: Mapping[str, Any] = {
+        "name": "citation_impact_report",
+        "schema": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "research_types": {"type": "array", "items": {"type": "string"}},
+                "secondary_types": {"type": "array", "items": {"type": "string"}},
+                "dimensions": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "topic_frontier": _dimension_schema(),
+                        "methodology": _dimension_schema(),
+                        "data_evidence": _dimension_schema(),
+                        "conclusion_depth": _dimension_schema(),
+                        "presentation": _dimension_schema(),
+                    },
+                    "required": ["topic_frontier", "methodology", "data_evidence", "conclusion_depth", "presentation"],
+                },
+                "early_impact": _impact_schema(),
+                "five_year_impact": _impact_schema(),
+                "impact_pathways": {"type": "array", "items": {"type": "string"}},
+                "risks": {"type": "array", "items": {"type": "string"}},
+                "recommendations": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["research_types", "dimensions", "early_impact", "five_year_impact"],
+        },
+        "strict": True,
+    }
+
+    system_prompt = (
+        "你是一名可持续发展与环境领域的资深研究评估专家。"
+        "请根据提供的评分规范，对给定论文文本输出结构化 JSON，随后将用于渲染报告。"
+        "保持客观、具体，引用文本中的关键信息。"
+    )
+    user_prompt = (
+        f"评分规范:\n{criteria_text}\n\n"
+        f"论文全文（纯文本，图表已转为文字，可按需引用）：\n{paper_text}"
+    )
+
+    messages = [
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=user_prompt),
+    ]
+
+    raw = chat_model.invoke(messages, response_format={"type": "json_schema", "json_schema": schema})
+    content = getattr(raw, "content", None) or (raw.generations[0].message.content if hasattr(raw, "generations") else None)
+    parsed: Mapping[str, Any]
+    if isinstance(content, str):
+        try:
+            parsed = json.loads(content)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Failed to parse model response as JSON: {exc}") from exc
+    elif isinstance(content, Mapping):
+        parsed = dict(content)
+    else:
+        raise ValueError("Unexpected response format from model.")
+
+    report_text = _render_report(parsed, title=config.title or config.text_path.stem)
+    return {
+        "title": config.title or config.text_path.stem,
+        "structured": parsed,
+        "report": report_text,
+    }
+
+
 def load_works_file(path: Path) -> list[Mapping[str, Any]]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -600,3 +700,78 @@ def find_pdf_for_work(work: Mapping[str, Any], pdf_dir: Path) -> Optional[Path]:
         if any(key and (key in name_key or key in full_key) for key in normalized_candidates):
             return pdf_path
     return None
+
+
+def _load_score_criteria() -> str:
+    if not SCORE_CRITERIA_PATH.exists():
+        raise FileNotFoundError(f"Score criteria file not found: {SCORE_CRITERIA_PATH}")
+    return SCORE_CRITERIA_PATH.read_text(encoding="utf-8")
+
+
+def _dimension_schema() -> Mapping[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "score": {"type": "integer", "minimum": 0, "maximum": 3},
+            "analysis": {"type": "string"},
+        },
+        "required": ["score", "analysis"],
+    }
+
+
+def _impact_schema() -> Mapping[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "level": {"type": "string", "enum": ["低", "中", "高"]},
+            "analysis": {"type": "string"},
+        },
+        "required": ["level", "analysis"],
+    }
+
+
+def _render_report(parsed: Mapping[str, Any], *, title: str) -> str:
+    template = CITATION_TEMPLATE_PATH.read_text(encoding="utf-8")
+
+    def _fmt_dimension(key: str) -> str:
+        dim = parsed.get("dimensions", {}).get(key, {}) if isinstance(parsed.get("dimensions"), Mapping) else {}
+        score = dim.get("score")
+        analysis = dim.get("analysis") or ""
+        score_text = f"{score}/3" if isinstance(score, int) else "n/a"
+        return f"{score_text} — {analysis}".strip(" —")
+
+    def _fmt_list(values: Any) -> str:
+        if isinstance(values, str):
+            values = [values]
+        if not values:
+            return "- 无"
+        items = [str(v).strip() for v in values if str(v).strip()]
+        return "\n".join(f"- {v}" for v in items) if items else "- 无"
+
+    early = parsed.get("early_impact", {}) if isinstance(parsed.get("early_impact"), Mapping) else {}
+    five_year = parsed.get("five_year_impact", {}) if isinstance(parsed.get("five_year_impact"), Mapping) else {}
+
+    replacements = {
+        "title": title,
+        "research_types": _fmt_list(parsed.get("research_types")),
+        "secondary_types": _fmt_list(parsed.get("secondary_types")),
+        "topic_frontier": _fmt_dimension("topic_frontier"),
+        "methodology": _fmt_dimension("methodology"),
+        "data_evidence": _fmt_dimension("data_evidence"),
+        "conclusion_depth": _fmt_dimension("conclusion_depth"),
+        "presentation": _fmt_dimension("presentation"),
+        "early_level": early.get("level") or "n/a",
+        "early_analysis": early.get("analysis") or "未提供分析。",
+        "five_level": five_year.get("level") or "n/a",
+        "five_analysis": five_year.get("analysis") or "未提供分析。",
+        "impact_pathways": _fmt_list(parsed.get("impact_pathways")),
+        "risks": _fmt_list(parsed.get("risks")),
+        "recommendations": _fmt_list(parsed.get("recommendations")),
+    }
+
+    rendered = template
+    for key, value in replacements.items():
+        rendered = rendered.replace(f"{{{{ {key} }}}}", str(value))
+    return rendered

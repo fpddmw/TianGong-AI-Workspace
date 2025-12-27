@@ -217,9 +217,9 @@ def write_outputs(rows, out_csv, out_json):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("-i", "--input", default="journal_bands_with_citation.md")
-    p.add_argument("-o", "--out", default="scripts/out.csv")
-    p.add_argument("-j", "--json", default="scripts/out.json")
+    p.add_argument("-i", "--input", default="./output/journal_bands_with_citation.md")
+    p.add_argument("-o", "--out", default="./output/out.csv")
+    p.add_argument("-j", "--json", default="./output/out.json")
     args = p.parse_args()
 
     with open(args.input, "r", encoding="utf-8") as f:
