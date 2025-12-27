@@ -5,22 +5,24 @@
 - 研究类型：{{ research_types }}
 - 次要类型：{{ secondary_types }}
 
-## 一、基本判断
-- 选题前沿性：{{ topic_frontier }}
-- 方法论完备性：{{ methodology }}
-- 数据/证据效力：{{ data_evidence }}
-- 结论影响深度：{{ conclusion_depth }}
-- 表述与规范性：{{ presentation }}
+## 一、评分维度（1–5）
+{{ dimensions_block }}
 
 ## 二、2 年影响力评估
-- 结论：{{ early_level }}
-- 支撑角度及分析：
-{{ early_analysis }}
+- 得分：{{ early_score }}（{{ early_level }}）
+- 拉升因素 Top2：
+{{ early_lifts }}
+- 压低因素 Top2：
+{{ early_drags }}
+- 总结：{{ early_summary }}
 
 ## 三、5 年影响力评估
-- 结论：{{ five_level }}
-- 支撑角度及分析：
-{{ five_analysis }}
+- 得分：{{ five_score }}（{{ five_level }}）
+- 拉升因素 Top2：
+{{ five_lifts }}
+- 压低因素 Top2：
+{{ five_drags }}
+- 总结：{{ five_summary }}
 
 ## 四、核心影响路径
 {{ impact_pathways }}

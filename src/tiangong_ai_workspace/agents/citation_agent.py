@@ -284,7 +284,7 @@ def _dimension_schema() -> Mapping[str, Any]:
         "type": "object",
         "additionalProperties": False,
         "properties": {
-            "score": {"type": "integer", "minimum": 0, "maximum": 3},
+            "score": {"type": "integer", "minimum": 1, "maximum": 5},
             "analysis": {"type": "string"},
         },
         "required": ["score", "analysis"],
@@ -296,22 +296,18 @@ def _impact_schema() -> Mapping[str, Any]:
         "type": "object",
         "additionalProperties": False,
         "properties": {
-            "level": {"type": "string", "enum": ["低", "中", "高"]},
-            "analysis": {"type": "string"},
+            "score": {"type": "integer", "minimum": 1, "maximum": 5},
+            "level": {"type": "string", "enum": ["低", "中", "高", "极高"]},
+            "lift_factors": {"type": "array", "items": {"type": "string"}, "minItems": 2},
+            "drag_factors": {"type": "array", "items": {"type": "string"}, "minItems": 2},
+            "summary": {"type": "string"},
         },
-        "required": ["level", "analysis"],
+        "required": ["score", "level", "lift_factors", "drag_factors", "summary"],
     }
 
 
 def _render_report(parsed: Mapping[str, Any], *, title: str) -> str:
     template = CITATION_TEMPLATE_PATH.read_text(encoding="utf-8")
-
-    def _fmt_dimension(key: str) -> str:
-        dim = parsed.get("dimensions", {}).get(key, {}) if isinstance(parsed.get("dimensions"), Mapping) else {}
-        score = dim.get("score")
-        analysis = dim.get("analysis") or ""
-        score_text = f"{score}/3" if isinstance(score, int) else "n/a"
-        return f"{score_text} — {analysis}".strip(" —")
 
     def _fmt_markdown_list(values: Any) -> str:
         if isinstance(values, str):
@@ -329,22 +325,59 @@ def _render_report(parsed: Mapping[str, Any], *, title: str) -> str:
         items = [str(v).strip() for v in values if str(v).strip()]
         return "、".join(items) if items else "无"
 
-    early = parsed.get("early_impact", {}) if isinstance(parsed.get("early_impact"), Mapping) else {}
-    five_year = parsed.get("five_year_impact", {}) if isinstance(parsed.get("five_year_impact"), Mapping) else {}
+    def _fmt_dimension_block() -> str:
+        dimension_labels = [
+            ("c1_pain_point", "C1 痛点命中度"),
+            ("c2_actionability", "C2 可操作性"),
+            ("c3_reusability", "C3 可复用资产"),
+            ("c4_citability", "C4 可引用性/可教学性"),
+            ("c5_evidence_strength", "C5 证据强度"),
+            ("c6_generalizability", "C6 泛化与外推能力"),
+            ("c7_uncertainty_auditability", "C7 不确定性表达与可审计性"),
+            ("c8_diffusion", "C8 跨圈层扩散潜力"),
+            ("c9_standardization", "C9 标准化/制度化进入性"),
+            ("c10_ecosystem", "C10 持续生态潜力"),
+        ]
+        dims = parsed.get("dimensions") if isinstance(parsed.get("dimensions"), Mapping) else {}
+        lines: list[str] = []
+        for key, label in dimension_labels:
+            dim = dims.get(key, {}) if isinstance(dims, Mapping) else {}
+            score = dim.get("score")
+            analysis = dim.get("analysis") or ""
+            score_text = f"{score}/5" if isinstance(score, int) else "n/a"
+            lines.append(f"- {label}: {score_text} — {analysis}".strip(" —"))
+        return "\n".join(lines) if lines else "- 无"
+
+    def _fmt_impact(value: Any) -> Mapping[str, str]:
+        data = value if isinstance(value, Mapping) else {}
+        score = data.get("score")
+        score_text = f"{score}/5" if isinstance(score, int) else "n/a"
+        return {
+            "score": score_text,
+            "level": data.get("level") or "n/a",
+            "lifts": _fmt_markdown_list(data.get("lift_factors")),
+            "drags": _fmt_markdown_list(data.get("drag_factors")),
+            "summary": data.get("summary") or "未提供总结。",
+        }
+
+    early = _fmt_impact(parsed.get("early_impact"))
+    five_year = _fmt_impact(parsed.get("five_year_impact"))
 
     replacements = {
         "title": title,
         "research_types": _fmt_inline_list(parsed.get("research_types")),
         "secondary_types": _fmt_inline_list(parsed.get("secondary_types")),
-        "topic_frontier": _fmt_dimension("topic_frontier"),
-        "methodology": _fmt_dimension("methodology"),
-        "data_evidence": _fmt_dimension("data_evidence"),
-        "conclusion_depth": _fmt_dimension("conclusion_depth"),
-        "presentation": _fmt_dimension("presentation"),
-        "early_level": early.get("level") or "n/a",
-        "early_analysis": early.get("analysis") or "未提供分析。",
-        "five_level": five_year.get("level") or "n/a",
-        "five_analysis": five_year.get("analysis") or "未提供分析。",
+        "dimensions_block": _fmt_dimension_block(),
+        "early_score": early["score"],
+        "early_level": early["level"],
+        "early_lifts": early["lifts"],
+        "early_drags": early["drags"],
+        "early_summary": early["summary"],
+        "five_score": five_year["score"],
+        "five_level": five_year["level"],
+        "five_lifts": five_year["lifts"],
+        "five_drags": five_year["drags"],
+        "five_summary": five_year["summary"],
         "impact_pathways": _fmt_markdown_list(parsed.get("impact_pathways")),
         "risks": _fmt_markdown_list(parsed.get("risks")),
         "recommendations": _fmt_markdown_list(parsed.get("recommendations")),
@@ -482,19 +515,42 @@ def _score_text(paper_text_raw: str, *, title: str, temperature: float) -> Mappi
             "type": "object",
             "additionalProperties": False,
             "properties": {
-                "research_types": {"type": "array", "items": {"type": "string"}},
+                "research_types": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": ["机制/发现型", "方法/模型型", "数据/基础设施型", "治理/框架/话语型"],
+                    },
+                    "minItems": 1,
+                },
                 "secondary_types": {"type": "array", "items": {"type": "string"}},
                 "dimensions": {
                     "type": "object",
                     "additionalProperties": False,
                     "properties": {
-                        "topic_frontier": _dimension_schema(),
-                        "methodology": _dimension_schema(),
-                        "data_evidence": _dimension_schema(),
-                        "conclusion_depth": _dimension_schema(),
-                        "presentation": _dimension_schema(),
+                        "c1_pain_point": _dimension_schema(),
+                        "c2_actionability": _dimension_schema(),
+                        "c3_reusability": _dimension_schema(),
+                        "c4_citability": _dimension_schema(),
+                        "c5_evidence_strength": _dimension_schema(),
+                        "c6_generalizability": _dimension_schema(),
+                        "c7_uncertainty_auditability": _dimension_schema(),
+                        "c8_diffusion": _dimension_schema(),
+                        "c9_standardization": _dimension_schema(),
+                        "c10_ecosystem": _dimension_schema(),
                     },
-                    "required": ["topic_frontier", "methodology", "data_evidence", "conclusion_depth", "presentation"],
+                    "required": [
+                        "c1_pain_point",
+                        "c2_actionability",
+                        "c3_reusability",
+                        "c4_citability",
+                        "c5_evidence_strength",
+                        "c6_generalizability",
+                        "c7_uncertainty_auditability",
+                        "c8_diffusion",
+                        "c9_standardization",
+                        "c10_ecosystem",
+                    ],
                 },
                 "early_impact": _impact_schema(),
                 "five_year_impact": _impact_schema(),
@@ -516,7 +572,11 @@ def _score_text(paper_text_raw: str, *, title: str, temperature: float) -> Mappi
         "strict": True,
     }
 
-    system_prompt = "你是一名可持续发展与环境领域的资深研究评估专家。" "请根据提供的评分规范，对给定论文文本输出结构化 JSON，随后将用于渲染报告。" "保持客观、具体，引用文本中的关键信息。"
+    system_prompt = (
+        "你是一名严格、客观、但不回避给出高低判断的研究评审模型。 "
+        "你的目标不是“谨慎”，而是做出有区分度、可解释、可复核的影响力判断。 "
+        "禁止行为： - 默认给“中” - 因缺乏引用或工具而一刀切降级 - 给出“全是优点、没有限制”的结论"
+    )
     user_prompt = f"评分规范:\n{criteria_text}\n\n" f"论文全文（纯文本，图表已转为文字，可按需引用）：\n{paper_text}"
 
     messages = [
