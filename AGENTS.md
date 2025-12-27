@@ -98,6 +98,7 @@ Use `--json` for machine-readable responses suitable for chaining agents.
 
 ## Helpful Notes
 - To stub LLM calls in tests, inject a custom `Runnable` when calling `run_document_workflow`.
+- When using OpenAI `response_format: json_schema` with `strict: true`, ensure the schema's top-level `required` includes every key in `properties` (and similarly for nested objects with `additionalProperties: false`).
 - Tavily wrapper retries transient failures; propagate explicit `TavilySearchError` for agents to handle.
 - Register new workflows via `tooling.registry.register_tool` for discoverability.
 - Shell/Python executors enforce configurable timeouts and command allow-lists—reuse them instead of invoking `subprocess` or `exec` directly.

@@ -299,7 +299,7 @@ def _render_report(parsed: Mapping[str, Any], *, title: str) -> str:
         score_text = f"{score}/3" if isinstance(score, int) else "n/a"
         return f"{score_text} — {analysis}".strip(" —")
 
-    def _fmt_list(values: Any) -> str:
+    def _fmt_markdown_list(values: Any) -> str:
         if isinstance(values, str):
             values = [values]
         if not values:
@@ -307,13 +307,21 @@ def _render_report(parsed: Mapping[str, Any], *, title: str) -> str:
         items = [str(v).strip() for v in values if str(v).strip()]
         return "\n".join(f"- {v}" for v in items) if items else "- 无"
 
+    def _fmt_inline_list(values: Any) -> str:
+        if isinstance(values, str):
+            values = [values]
+        if not values:
+            return "无"
+        items = [str(v).strip() for v in values if str(v).strip()]
+        return "、".join(items) if items else "无"
+
     early = parsed.get("early_impact", {}) if isinstance(parsed.get("early_impact"), Mapping) else {}
     five_year = parsed.get("five_year_impact", {}) if isinstance(parsed.get("five_year_impact"), Mapping) else {}
 
     replacements = {
         "title": title,
-        "research_types": _fmt_list(parsed.get("research_types")),
-        "secondary_types": _fmt_list(parsed.get("secondary_types")),
+        "research_types": _fmt_inline_list(parsed.get("research_types")),
+        "secondary_types": _fmt_inline_list(parsed.get("secondary_types")),
         "topic_frontier": _fmt_dimension("topic_frontier"),
         "methodology": _fmt_dimension("methodology"),
         "data_evidence": _fmt_dimension("data_evidence"),
@@ -323,9 +331,9 @@ def _render_report(parsed: Mapping[str, Any], *, title: str) -> str:
         "early_analysis": early.get("analysis") or "未提供分析。",
         "five_level": five_year.get("level") or "n/a",
         "five_analysis": five_year.get("analysis") or "未提供分析。",
-        "impact_pathways": _fmt_list(parsed.get("impact_pathways")),
-        "risks": _fmt_list(parsed.get("risks")),
-        "recommendations": _fmt_list(parsed.get("recommendations")),
+        "impact_pathways": _fmt_markdown_list(parsed.get("impact_pathways")),
+        "risks": _fmt_markdown_list(parsed.get("risks")),
+        "recommendations": _fmt_markdown_list(parsed.get("recommendations")),
     }
 
     rendered = template
@@ -480,7 +488,16 @@ def _score_text(paper_text_raw: str, *, title: str, temperature: float) -> Mappi
                 "risks": {"type": "array", "items": {"type": "string"}},
                 "recommendations": {"type": "array", "items": {"type": "string"}},
             },
-            "required": ["research_types", "dimensions", "early_impact", "five_year_impact"],
+            "required": [
+                "research_types",
+                "secondary_types",
+                "dimensions",
+                "early_impact",
+                "five_year_impact",
+                "impact_pathways",
+                "risks",
+                "recommendations",
+            ],
         },
         "strict": True,
     }

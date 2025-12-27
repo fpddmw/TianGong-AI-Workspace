@@ -749,13 +749,20 @@ def citation_study(
     _emit_response(response, json_output)
 
     if not json_output:
-        typer.echo("")
-        for item in payload.get("works", []):
+        works = payload.get("works", []) if isinstance(payload, dict) else []
+        if works:
+            typer.echo("")
+        for idx, item in enumerate(works):
             title = item.get("title") or "(untitled)"
             source_mode = item.get("fulltext_mode") or "n/a"
             typer.echo(f"- [{source_mode}] {title}")
-        typer.echo("")
-        typer.echo("Use --json to view structured scores and full reports.")
+            report = item.get("report") or ""
+            if report.strip():
+                typer.echo("")
+                typer.echo(report.strip())
+                typer.echo("")
+            if idx != len(works) - 1:
+                typer.echo("\n---\n")
 
 
 # --------------------------------------------------------------------------- Citation impact report (plain text)
